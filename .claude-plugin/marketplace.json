@@ -1,0 +1,12 @@
+{
+  "name": "app-factory-dev",
+  "owner": { "name": "mach" },
+  "description": "Local dev marketplace for the app-factory pilot plugin",
+  "plugins": [
+    {
+      "name": "app-factory",
+      "source": "./",
+      "description": "Pilot: PRD → contract → build → audit → iOS Simulator test"
+    }
+  ]
+}

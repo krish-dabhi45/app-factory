@@ -1,0 +1,139 @@
+---
+name: app-qa
+description: How app-factory tests and audits an app — writing one device test per user flow, running them (parallel runners, affected-only re-runs), filing findings, fixing within scope, resolving with test evidence, blocked dependencies, the design comparison, senior QA journeys, and the one final audit that fixes. Use when testing, auditing or fixing an app in an app-factory project (CONTRACT.md and .pipeline/ present).
+---
+
+# Testing and auditing in app-factory
+
+Every rule here is a requirement. `P` below means the pipeline command your prompt gives you (`node ".../pipeline.mjs"`, possibly with `PIPELINE_DIR=...` in front). Never edit `.pipeline/` by hand.
+
+## 0. Rules for every agent in this skill
+
+- **E1. The expected result comes from CONTRACT.md or PRD.md, never from what the app does now.** Quote it and cite its source (`AC9`, `field table: Price`, `PRD §7`). If the app does something the contract does not describe, that is a finding, not an expectation.
+- **E2. Start from a fresh install.** A flow test installs the app itself. By hand (explore, design comparison, senior QA): uninstall (`xcrun simctl uninstall <udid> <bundle id>` / `adb -s <serial> uninstall <applicationId>`), install, launch. A defect that does not happen on a fresh install with only the listed steps is not filed. (Three false paywall findings in one run came from PRO left switched on by an earlier step.)
+- **E3. Evidence or it did not happen.** Every pass or fail you report names the test or the exact steps, the observed result and, for anything only visible, a screenshot path under `.pipeline/screenshots/`.
+- **E4. Coverage, never bug counts.** Run every test you are given; never invent a defect to show effort; "all pass" is a valid result.
+- **E5. Report as you go** with `P log <your phase> "<what happened>"`: when you start, before each build or test run, after each result.
+- **E6. Test the contract, nothing more.** A defect breaks a source: a criterion, a field-table row, a PRD line, the imported design, or a numbered rule of the build skill — or is a crash, data loss or wrong data. Anything else is a suggestion: minor `"PROPOSAL: <what> — no source"`, never blocking, never fixed in this run.
+- **E7. Nothing finished runs again.** A test that passed is not re-run unless code it covers changed since (`P affected <base>` gives exactly those tests); run a test file once, then only its failing tests by name; `-r failures-only --no-pub` on every `flutter test`. A blocked criterion is never tested.
+- **E8. Read only what you need.** Never print a whole file; `grep -n` to find the place, then read that range. Find elements on a device by key or with `mobile_list_elements_on_screen`, not by screenshot; take a screenshot only as evidence for a finding, at the end of a scenario, or for the design comparison.
+- **E9. Keep simple things simple.** No extra frameworks, helpers, steps, retries, devices or files the task does not call for; a fix is the smallest change that makes the app match its source.
+
+## 1. The final audit (once, at the end — it fixes, not only files)
+
+There is no audit after the build: the gate (scripts) runs there, and everything below happens once, here. For every change, section 5 applies (a test that fails before it and passes after it); then `P affected <base>` names the device tests to re-run — only those.
+
+- **F1. Weak tests.** One break-it probe per piece of code a criterion depends on (not one per criterion when several share it): copy the file to `.pipeline/probe-backup/`, break the exact code (delete the guard, change the rounding, return a wrong value), run only the tests of the criteria that depend on it and confirm they FAIL; restore from the backup, confirm with `cmp` that it is byte-identical, confirm the tests pass again. A test that still passes with the code broken is rewritten until it fails on the broken code. (In v3 the probes found two tests that could not fail.)
+- **F2. Code rules.** Every numbered rule of the build skill, checked in the code — fix each break (a rule correct in the logic but never called from its screen is the most common one: an export that skipped the share limit; a paywall check the button never used).
+- **F3. Missing.** Every criterion that is not blocked is implemented, reachable on screen, and has its tests; every "Missing keys" line is built as L12 says (the switch in `lib/config/api_keys.dart`, the free service with its note and attribution or the not-available message, the selector's unit tests, no key in the code); implement what is missing, with unit/widget tests and, for a flow, its flow test. With a design: `P colors` passes, every screen of `design/SCREENS.md` that CONTRACT.md keeps exists and no other, every row of `design/FLOWS.md` and `design/ASSETS.md` is implemented, every designed screen has its T7 test. **Design (forced): section 7 runs here, in full, and `P design-check` must pass** — the verdict cannot be pass without it. **Assets (build skill U13, U14):** `P assets` passes — the app icon on iOS (every size, opaque) and Android (legacy + adaptive) exactly as `app-icon.mjs` made it from the contract's icon (or, when the contract records `--none`, Flutter's default kept and named in the report), and no @2x/@3x file loaded by name; then, for every image and icon PRD.md or `design/ASSETS.md` lists: it is used, from that file, at its stated size in points, where the source puts it, with its T7 placement test. Fix each one that is not — a missing or misplaced asset is never left as a finding at the end.
+- **F4. Traceability.** Every screen, button, setting and stored field in the code is accounted for by a criterion, a field-table row, an approved proposal in CONTRACT.md, or a rule of the build skill. Anything else: delete it with its tests, log what and why.
+- **F5. Optimise** (Flutter, only when the app passed all testing) — smaller and simpler, changing nothing the user or the logic can tell apart. Every change proven by measurement or by the tests; a change you cannot prove is not made.
+  **Why apps are big (measured on this Mac):** a blank Flutter app's release APK (arm64) is 14.8 MB — 11.1 MB engine, 2 MB framework, which every Flutter app carries; the app's own code was 2 KB. A real app (Live Street View) was 140.7 MB on iOS, 112 MB of it images — which the design import now compresses. Debug builds are never the size to judge.
+  1. **Measure before:** iOS-only app → `flutter build ios --release --no-codesign --analyze-size`; otherwise `flutter build apk --release --analyze-size --target-platform android-arm64`. Note the total, the per-package lines and lib/'s line count (`find lib -name '*.dart' | xargs wc -l | tail -1`).
+  2. **Unused packages:** `P deps` lists every package and its files; remove each UNUSED one (`flutter pub remove <name>`).
+  3. **Heavy packages:** replace one only by climbing build-skill rule L11 — SDK first, then a few lines of code, then a smaller package — and only when the measured size drops. Never replace exact money (L2) or platform access the SDK does not have.
+  4. **Dead code:** `flutter analyze` reports no unused imports, variables or private members (`dart fix --apply` removes the mechanical ones). `flutter test --coverage`, then for each public class or function no test runs, search the whole project for references — none outside its own tests means dead: delete it and those tests. A line no test runs but the app does use is a missing test: write it. Assets nothing refers to (no file in lib/, no pubspec.yaml entry, no row of design/ASSETS.md): delete; an asset ASSETS.md maps to a screen but lib/ does not use is missing design — implement it.
+  5. **Logic — speed and simplicity, never results:** a loop inside a loop over the same records where a Map lookup would do; several passes where one is enough; a value recomputed on every rebuild (L10); the same rule written twice (keep one); a long if/else over a fixed set where a switch or table is clearer.
+  6. **Prove each step:** one commit per step (`optimise: <what>`); after each, `flutter analyze` and `flutter test` must pass, otherwise `git revert --no-edit HEAD`.
+  7. **Measure after,** exactly as in step 1, and record `P report size "<before → after: total, per package, lib/ lines, what each step removed>"`. Size or lines must not grow.
+  Not allowed here: changing behaviour, texts or layout; changing what any logic function returns for any input, a rule, formula, rounding, message, limit or the stored-data format; editing or deleting a test to make a change pass (except with the dead code it tested); renaming or reformatting code you are not otherwise changing.
+
+## 2. Exploring the app (once, before the test rounds)
+
+Fresh install (E2). Visit every screen reachable from launch; open every menu, dialog and sheet; tap every button once with valid data — finding elements with `mobile_list_elements_on_screen`. Write no file: return the screens and the flows you saw. File every element or screen not in CONTRACT.md as minor `"NOT IN CONTRACT: …"` (the final audit decides), and every criterion you could not find on screen as a major finding.
+
+## 3. Writing flow tests (the flow-test writers, during the build)
+
+The device tests are written by the test side, from CONTRACT.md — never by the builders, never from what the app does. They are few and wide: **one test per user flow** in CONTRACT.md's "User flows" section, asserting every criterion the flow passes through. Everything else belongs in a faster kind of test:
+
+| What | Where | Why |
+|---|---|---|
+| Each rule, formula, limit, validation edge (L8) | unit test (`test/domain`, `test/data`) — the builders | ~0.06 s each (v3: 754 tests in ≤ 43 s) |
+| Each screen at every size, largest text, locale, dark mode (T3) | widget test (`test/ui`) — the UI builder | no device; v3's device walks for these took hours |
+| A flow across screens: navigation, what is stored, what each screen shows, permissions, relaunch | **flow test** (`integration_test/<group>_flow_test.dart`) — you | ~10 s per test on a device (v3: 57 tests in ~10 min) |
+
+A flow test:
+- starts from empty storage and drives the screens **by `AppKeys` only** — never by coordinates or by text that can change;
+- asserts, at each step, the data (values, messages, what is stored) **and** the UI: each element the contract names is present with its exact text, inside the safe area (its rect within the screen minus `MediaQuery.paddingOf`), and not overlapping the elements next to it (`tester.getRect` of both);
+- is named `"<flow name> AC.. AC.."` with every criterion it checks — that name is how `P coverage` and `P affected` find it;
+- waits for what it needs with `pumpAndSettle` or a bounded `pump` loop — never a fixed long sleep;
+- carries `tags: ['ios']` or `tags: ['android']` when it only applies to one platform (declared in `dart_test.yaml`); the runners exclude the other platform's tag;
+- is never written for a blocked criterion; a feature with a missing key is tested in its free or not-available behaviour (CONTRACT.md "Missing keys").
+Add one flow test per kill-and-relaunch or double-submit case the contract states (data survives; nothing saved twice), one for each denied permission the contract handles, and — with ads — one per placement (the debug build shows Google's labelled test ad there, not over content or the system bars) plus one Premium journey (buy with a test purchase, then every ad screen and a relaunch: no ad anywhere). When `design/` exists, every row of `design/FLOWS.md` is asserted inside some flow test (that element → that destination).
+
+## 4. Findings
+
+```
+P finding add <ACn or -> <critical|major|minor> @<logic|ui|shared> "<test name or step>: <screen>, Device: <iOS|Android> <udid or emulator name>, fresh install. Steps: … Expected: <quote> (<source>). Observed: … Screenshot: <path, when visual>."
+```
+
+**Severity:** critical = crash, data loss, wrong data or calculation; major = a user-visible break of a cited source (text that differs from the contract, overlap or clipping, a broken flow, a criterion not met, a broken skill rule); minor = invisible to the user, or `NOT IN CONTRACT` / `PROPOSAL` / `DECIDED` (a choice made during the run because nothing said otherwise — never ask the user mid-run). A finding that cites no source is a PROPOSAL (E6).
+
+**Owner = where the cause is, not where the symptom shows.** Read the code first: `lib/domain/**`, `lib/data/**` → `@logic`; `lib/ui/**` → `@ui`; `lib/main.dart`, `pubspec.yaml`, `integration_test/`, `ios/`, `android/`, `assets/` → `@shared`; cannot tell → wrong value `@logic`, wrong display `@ui`.
+
+**Good finding (from a real run):** `X5 major @ui — TC-U-H-03: Tax Invoice → Create at text size accessibility-extra-extra-extra-large, fresh install. Expected: Preview and Save labels inside their buttons (U2). Observed: "Preview" wraps to two lines; the second line is drawn below the button border. Screenshot: .pipeline/screenshots/r2-03-a11y-xxxl-preview-clip.png.`
+**Bad finding (do not do this):** `AC36: tapping a PRO template as a Free user did not open the Plans screen.` — no fresh install, no steps, no evidence; PRO had been switched on by the tester's own earlier step.
+
+## 5. Fixing within scope
+
+You may change only the files your prompt says you own. For each fix:
+1. Note the base: `git rev-parse HEAD` (once, before your first change).
+2. Reproduce it with a test that FAILS — a unit or widget test whenever the cause can be reached without a device (most can); named after the criterion (`'AC9 discount over amount blocks save'`).
+3. Fix the cause — the smallest change in your own files. No refactors, renames, formatting or "while I'm here" edits, and no new behaviour the contract does not have. Never fix a PROPOSAL.
+4. `P scope <base> <your globs>` must print "in scope" (a fixer with its own paths); revert anything it lists.
+5. `flutter analyze` and `flutter test -r failures-only --no-pub` pass — not only your test.
+6. Commit only your files (the command your prompt gives).
+7. Resolve it (section 6).
+
+A cause outside your files: do not touch it — route it (`P finding route <Xn> <owner>`).
+
+## 6. Running tests, resolving, pending, blocked
+
+**Running (test runners).** Run your test files in one command; then only the failing tests, by name. For each failure decide, after reading the test and the code: the test does not match the contract (wrong key, wrong expectation, not waiting for something the contract allows to take time) → fix the test, in `integration_test/` only; the app does not match the contract → a finding (section 4); it needs something that is not there → blocked (below). Never retry a failure hoping it passes; a flaky test is a test to fix.
+
+**Resolving — no verify step.** A finding is resolved only with this evidence: a test that failed because of it now passes. The fixer resolves what its unit or widget test proves: `P finding resolve <Xn> "<test name>: failed before the fix, passes now"`. A fix only a device can prove: the fixer marks it `P finding pending <Xn> "<flow test name>"` — it leaves every fixer's inbox — and the next round's runner, whose affected tests include it, resolves it when that test passes. A DESIGN finding is resolved only when `screen-diff` on that screen no longer shows its region (section 7); a senior-QA visual finding by re-doing those exact steps on the same device after a fresh install, with a new screenshot. Never resolve a finding you could not prove.
+
+**Missing keys are not blocked.** A feature whose key is missing is tested in the behaviour CONTRACT.md's "Missing keys" section gives it: with the free service it must work, show the "for now" note and the provider's attribution; "not available" must show its banner or message, never crash, blank or spin. Its key switch has unit tests (build skill L12).
+**Blocked — cause outside the code.** Behaviour that needs the real service whose key is missing, or a platform API that does not exist (in v3: an embedded `MKLookAroundViewController` opens Apple's own full-screen viewer on every tap, and no public API stops it — three test rounds were spent on it): `P finding block <Xn> "<what is missing, and the evidence: the API or doc that shows it>"` and `P feature <ACn> blocked "<what is missing>"`. It stops blocking the run, is never tested again, and is listed for the user. Never block something code could fix.
+
+## 7. Design check at the end of testing (forced — the final audit cannot pass without it)
+
+Done once, after the test rounds and senior QA, inside the final audit, for every screen registered with `P reference` (each Figma frame in `design/SCREENS.md` that CONTRACT.md keeps, or each mockup PRD.md gives). Nothing is judged by eye alone: every difference is located by `screen-diff`, every bar, button and transition is checked against the design data, and every result is recorded.
+
+**Setup, once per frame size.** `P design-device <W> <H>` names the simulator type whose screen is exactly the frame's size in points (e.g. 375×812 → iPhone 11 Pro); create it under the name it gives if it does not exist. A frame size no simulator has is reported, never compared on another size (everything would shift). Set the status bar to the design's: `xcrun simctl status_bar <udid> override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3` — so the status bar is compared, not hidden. Build the app once and install it.
+
+**Per screen:**
+1. **Same state as the frame** — reached through the flows of `design/FLOWS.md` (or the PRD), with the records, tab and empty/filled/error/loading state the frame shows. A state you cannot reach is a finding.
+2. **Screenshot and compare:** `xcrun simctl io <udid> screenshot .pipeline/screenshots/design-<slug>.png`, then `node "<plugin>/scripts/screen-diff.mjs" <reference> .pipeline/screenshots/design-<slug>.png .pipeline/screenshots/design-<slug> --mask <the masks P references lists for it>`. Masks are only the live areas the contract names (a map, camera or Look Around view, live data) — never a bar or a button. Look at `diff.png` once and at every `region-<n>.png` (design left, app right). Every region is either a defect (step 5) or one of: live data the contract names, the keyboard, a system alert — anything else is a defect, however small.
+3. **Component inventory — every component of the frame, one by one, none skipped.**
+   - *List them.* With a Figma frame: \`node "<plugin>/scripts/design-components.mjs" extract design/screens/<slug>.context.md --flows design/FLOWS.md > <scratch>/<slug>.components.json\` — every text (its exact string), image, icon, button, field, control and bar of the frame, by node id (on the real v2 premium screen: 34). With a PRD mockup: write that JSON yourself from the PRD's section for the screen and the mockup — every text exactly as written, every button, icon, image, field and bar, each with an id (\`m1\`, \`m2\`, …). Register it: \`P components <slug> <file>\`.
+   - *Find them in the app,* at the same state: save the \`mobile_list_elements_on_screen\` result to \`<scratch>/<slug>.elements.txt\`, then \`node "<plugin>/scripts/design-components.mjs" match <slug>.components.json <slug>.elements.txt > <scratch>/<slug>.results.json\` — texts found on screen are marked present; every other component is "check".
+   - *Decide every "check"* — from the element list, the screenshot and the region crops: **present** (evidence: the element line, or where it is on the screenshot), **missing** (file \`DESIGN <slug>: <kind> <name or text> — in the design at <where>; not in the app\` and put its X id in evidence), or **excluded** (only when CONTRACT.md leaves it out — evidence: that line or its Q id). Wrong text, wrong icon or wrong image counts as missing: the design's component is not there. Record all of them: \`P component-results <slug> <results.json>\`. A component left unchecked fails \`P design-check\`.
+4. **Bars — each checked against the frame's layers (`pages/<page>.metadata.xml`, `screens/<slug>.context.md`) or the mockup:**
+   - *Status bar:* light or dark content as the design shows it (`AnnotatedRegion<SystemUiOverlayStyle>` / the AppBar's `systemOverlayStyle`); nothing of the app drawn under it (U10).
+   - *Navigation / app bar:* present when the frame has one; its height, background colour, title text, font and alignment; the back button's icon (the asset ASSETS.md maps, not a default arrow), size and position; every trailing action in the design's order.
+   - *Tab bar / bottom bar:* every item in the design's order with its icon (from ASSETS.md) and label; selected and unselected colours exactly as COLORS.md; height and the gap above the home indicator; no item missing or extra.
+   - *Any other bar* the frame has (a search bar, a segmented control, a toolbar): position, size, colours, texts, icons.
+5. **Buttons — every button, chip, link and tappable icon in the frame:** present; its text exactly as the design (case, wording); its icon from ASSETS.md; width and height within 2 points of the design's layer; position (alignment and order); fill, text and border colours from COLORS.md; corner radius as the layer's; the disabled and selected states the design shows; it gives press feedback (U12). Each button the design has and the app lacks, or the app has and the design lacks, is a defect.
+6. **Record:** each defect is its own finding — `P finding add <ACn or -> major @ui "DESIGN <slug>: <bar | button | element> — design: <what, where, size, colour>; app: <what, where>. Evidence: .pipeline/screenshots/design-<slug>/region-<n>.png"` (critical when a whole bar, feature or screen is missing). Then `P design-result <slug> <regions> <defects>`.
+
+**Transitions — every row of `design/FLOWS.md`** (without a design: every navigation the PRD describes), as one table in your handoff — element, trigger, expected destination, expected transition, code (file:line), result:
+- the code navigates from that element on that trigger to that destination (a flow test asserts the destination);
+- the kind of transition matches: push → `MaterialPageRoute` / the router's default page (platform transition); overlay or sheet → `showModalBottomSheet` / `showDialog`; replace → `pushReplacement` / `go`; back → `pop`; a different kind recorded in FLOWS.md (dissolve, slide in from a side) → that one, built with a `PageRouteBuilder`, its duration as recorded and never over 400 ms (U12);
+- in-screen changes (loading → content, expand/collapse) animate as U12 says, with durations from `Durations`, nothing over 400 ms; and no `PageRouteBuilder` exists that no FLOWS.md row asks for.
+Each mismatch is a finding `"DESIGN <slug>: transition <element> → <destination> — design: <kind, duration>; app: <kind, duration> (<file:line>)"`.
+
+**Fix and re-check:** the final audit fixes every DESIGN finding (section 5), then re-runs only that screen's screenshot and `screen-diff` — the region is gone → resolve the finding with the new region image as evidence, and record `P design-result` again. After each fix, record the component as present again (\`P component-results\`). \`P design-check\` must pass: every referenced screen compared, every component of it present or excluded, no DESIGN finding open. A separate step after the final audit runs \`P design-check\` and \`P assets\` itself; the run is not done unless both pass — this check cannot be skipped or reported done without doing it.
+
+## 8. Senior QA (after the test rounds; the journeys are split across simulators)
+
+You use the app as its real user would, with PRD.md and CONTRACT.md as your knowledge. The app is installed for you. Work through your scenario(s) by hand at a user's pace — finding elements with `mobile_list_elements_on_screen`, a screenshot when you file or finish a scenario. Cover only what the flow tests cannot: whole journeys across features. You file findings; you do not change app code.
+
+1. **First use:** a new user with no guidance completes the app's main job once, end to end, using every screen that journey needs.
+2. **Mistakes:** in that journey, enter something wrong, notice it from what the app shows, correct it; then delete a record and create it again.
+3. **Real data volume:** write `integration_test/volume_test.dart`: seed 50 records into every top-level list through the real repositories, and into every child list the contract's maximum for the paid plan (or 50); open and scroll each list and open each record's detail and preview — nothing overflows, nothing is missing, totals are right. Run it on your simulator.
+4. **A period of use:** reach every limit the PRD states (free caps, paywall), then continue as the upgraded user and confirm each limit is lifted.
+5. **Navigation:** from every screen, go back with the back button and the back gesture; the previous screen shows, and no saved data is lost.
+6. **This screen size:** your simulator is the iPhone SE (smallest), the iPhone 17 or the iPhone 17 Pro Max (largest) — on every screen you visit, everything the design shows for it is there and whole: nothing cut off at an edge, under the status bar, notch, home indicator or keyboard, no text truncated or overlapping that the design shows whole, nothing stretched, and what does not fit scrolls into view. Each defect is a finding @ui "U15 <screen> on <device>: <what>", with a screenshot.
+
+Stop when your scenarios are done once each. Do not invent further scenarios. File only what breaks a source (E6).

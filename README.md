@@ -1,0 +1,89 @@
+# app-factory
+
+A Claude Code plugin that turns a `PRD.md` into a built, audited and simulator-tested mobile app.
+Flow: Figma link from the PRD — **asked for in the chat at once if the PRD has none** → Figma design imported once (images compressed) → contract, with every question asked in the chat upfront; a feature whose API key the PRD does not give **works now through a free, no-key service** the run found and called once to prove it (with a short "free version for now" note), or shows a **"not available" banner or message** — and switches to the real service by itself once the key is added (`--dart-define`), with no code change; only what truly needs the real key is blocked → **parallel build** per feature group (logic builder ∥ UI builder ∥ flow-test writer) → integrator → a **gate of scripts, no audit** → explore → **flow tests on up to 3 iOS simulators at once**, then the Android runner **while the fixers fix** → later rounds re-run **only the tests whose code changed** → **senior QA** journeys split across the simulators → **one final audit that fixes**: first the **forced design check** of every screen against its Figma frame or PRD mockup (pixel comparison on a simulator of the frame's size; **every component of the design — text, image, icon, button, field, bar — checked present one by one**; bars, buttons, transitions), the app icon, weak tests, code rules, anything missing, then the code optimisation → **a separate agent re-runs `design-check` and `assets`; the run is not done unless both pass** → run report → cleanup. No verify or re-check agents, and no documents besides CONTRACT.md.
+
+## What is in this folder
+
+| Path | What it is |
+|---|---|
+| `.claude-plugin/plugin.json` | Plugin manifest (name, version) |
+| `.claude-plugin/marketplace.json` | Lets Claude Code install the plugin straight from this folder |
+| `workflows/build-app.js` | The pipeline: the `/app-factory:build-app` command |
+| `scripts/assets.mjs` | Compresses the imported design's images once, before any code uses them: lossless WebP (checked pixel-identical), scaled only to what the sharpest phone shows at the size the design draws them. `node scripts/assets.mjs selftest` tests it |
+| `scripts/firewall.mjs` + `hooks/hooks.json` | A `PostToolUse` hook: a Bash output over 8 KB from an app-factory agent is cut to its first and last lines, the full text kept in `.pipeline/tool-output/`. Only for subagents in a project with an active run — never your own chats. `node scripts/firewall.mjs selftest` |
+| `scripts/secrets.mjs` (`pipeline.mjs secret …`) | API keys outside the project, never printed: `set` (stdin), `names`, `define` (`--dart-define-from-file`), `native` (Android/iOS native SDK files, git-ignored), `move` (a key found while coding → stored, and the file rewired to read it from its proper place), `scan` (fails on a key in any file), `forget` (end of run: the keys are masked in this project's Claude Code transcripts, temp output and `.pipeline/` records — out of the coding agents' context; the app keeps them and still builds with them). The hook also replaces stored keys and known key formats in Bash/Read/Grep output with `‹NAME›`. GUIDE section 9d |
+| `scripts/run-report.mjs` | Measures a run from Claude Code's own records: per-agent times, how much ran in parallel, where tool time went, tokens, screenshots, firewall cuts. `node scripts/run-report.mjs <project>`; the run saves it into PROGRESS.md |
+| `scripts/simulate.mjs` | Runs the workflow with fake agents through 9 scenarios and checks the steps, their order and parallelism — run after changing the workflow |
+| `scripts/app-icon.mjs` + `app-icon.swift` | The only way an app icon is made: from the contract's icon file, every iOS size (square, opaque — iOS rounds the corners itself) and the Android launcher + adaptive icon (logo in the 66 dp safe zone). Refuses a source that is not square, under 1024 px or pre-rounded unless the contract records the user's choice; records what it made, which `pipeline.mjs assets` checks. `node scripts/app-icon.mjs selftest` |
+| `scripts/design-components.mjs` | The component inventory of a designed screen: every text (exact string), image, icon, button, field, control and bar of the Figma frame by node id (34 on the real v2 premium screen), and the first match of the texts against the app's element list. `node scripts/design-components.mjs selftest` |
+| `scripts/screen-diff.mjs` + `screen-diff.swift` | The end-of-testing design check's comparison: a simulator screenshot against the screen's reference (Figma frame or PRD mockup), compared at the lower of the two resolutions; returns every differing region in points with a design-vs-app crop. Finds an element moved 1–3 points; ~0.2 s per screen. `node scripts/screen-diff.mjs selftest` |
+| `scripts/crop.swift` | Cuts each screen exactly out of one whole-page Figma screenshot (one Figma call per page instead of one per screen) |
+| `scripts/pipeline.mjs` | The only writer of a project's `.pipeline/` state; also writes the live `PROGRESS.md`. Also: `reference`, `design-device` (the simulator with a frame's exact size), `design-result`, `components` / `component-results` (each component present with evidence, missing with its finding, or excluded with its contract line), `design-check` (every referenced screen compared, every component present or excluded, no open DESIGN finding), `assets` (the app icon on every platform, exactly as `app-icon.mjs` made it, and no @2x/@3x file loaded by name), `affected` (which criteria — so which tests — a change touches, from the groups' commits), `shard` (splits the flow tests across runners), `stray` (fails on any file outside the app, its tests, CONTRACT.md and design/), `feature … blocked` / `finding block` / `finding pending`, `report` (lessons, size, cleanup and the run report become sections of PROGRESS.md), `cleanup` (the run's last step: deletes test worktrees, build output and caches, probe and backup files, and this Mac's app-factory simulators and emulators), `stop`/`resume`, `timing` (start, pause for questions, stop, resume, interruptions, end, and time spent per phase), `coverage` (every criterion that is not blocked has a test), `colors` (fails on any colour in the code that is not in the imported design), `deps` (every package and the files that use it; fails on an unused one), `scope` (changed files stay inside an agent's folders), finding owners and per-agent inboxes. `node scripts/pipeline.mjs selftest` tests it |
+| `skills/flutter-app/SKILL.md` | Build rules every Flutter builder, test writer and the final audit follow |
+| `skills/app-qa/SKILL.md` | Writing and running flow tests, findings, fixing, resolving (a test that failed and now passes — no verify step), blocked dependencies, the design comparison, senior QA, and the final audit that fixes |
+| `skills/stop/SKILL.md` | `/app-factory:stop` — stops a running build in the middle (from the chat that started it), frees the run and device locks and shuts down the plugin's devices, keeps all work; says how to continue it later |
+| `skills/flutter-ads/SKILL.md` | Ads (AdMob) when the PRD has them: a placement audit per app (screens ranked by flows, format allowed per screen by Google's policy pages), Google's demo IDs in debug builds, consent, and no ads once Premium is bought. `references/` holds the ADS_REFERENCE.md and flutter-admob-ads skill it was built from, with what it corrects |
+| `agents/tester.md` | The tester sub-agent: every pipeline step that uses a simulator or emulator runs as it, and it answers chat requests like "take a screenshot of the app". Uses the one shared device set (section 9 of GUIDE.md) |
+| `.mcp.json` | Starts mobile-mcp (pinned 1.0.5), which drives the iOS Simulator |
+| `install.sh` | Installs the plugin into one project folder: `./install.sh <project-folder>` |
+| `setup/install-app-factory/SKILL.md` | Source of the personal `/install-app-factory` command (the live copy is in `~/.claude/skills/`) |
+| `GUIDE.md` | Step-by-step setup and usage guide, with the problems seen so far and their fixes |
+| `PILOT.md` | Test plan and results of the pilot runs |
+
+## Requirements (the versions this was run with)
+
+- macOS with Xcode 26.1.1 and the iOS 26.1 Simulator runtime
+- Claude Code 2.1.283 (VS Code extension), signed in
+- Node.js 26.7.0 and npx 11.19.0; internet on the first run (`npx` downloads mobile-mcp 1.0.5 and mobilecli)
+- git 2.50.1 — every run makes the project a git repository
+- For a Figma design: the Figma connector in Claude Code, signed in to a Figma account that can open the file. On this Mac it is signed in as "sanket rola" (Pro plan, Full seat), which allows 200 Figma calls a day and 10 a minute
+- Flutter 3.38.5 with the Android SDK — Flutter is the default stack. Android testing uses the SDK at `~/Library/Android/sdk`, the Android 15 (API 35) Play Store arm64 system image, and the Java Flutter uses (`/opt/homebrew/opt/openjdk@17`; no Java is on the PATH, and `avdmanager` needs one). Change `ANDROID_SDK`, `JAVA_HOME` and `ANDROID_IMAGE` in `workflows/build-app.js` (or pass `androidSdk`, `javaHome`, `androidImage`) on another Mac
+- XcodeGen 2.46.0 — only for `"stack":"swiftui"` (native iOS)
+
+## Set up
+
+In the project's VS Code window, type `/install-app-factory` in the Claude Code panel, then reload the window and start a new chat. Full steps, checks and troubleshooting are in [GUIDE.md](GUIDE.md).
+
+After editing anything here: raise `version` in `.claude-plugin/plugin.json` (an unchanged version is skipped) and type `/install-app-factory` again in each project's window.
+
+If this folder is moved: change `ROOT` and `FLUTTER` near the top of `workflows/build-app.js` (or pass `"root"` / `"flutter"` as arguments). These two paths are the only machine-specific values in the plugin; `install.sh` refuses to run while `ROOT` does not match its own folder.
+
+## Use
+
+Put `PRD.md` in an empty project folder, open that folder in VS Code, open the Claude Code panel. Runs are started only from the panel, so everything is visible.
+
+1. `/app-factory:build-app` — if the PRD has no Figma link, the chat asks you for it at once (or choose "No Figma design"); then it imports the Figma design and audits the PRD and design for every gap (design, logic, data and backend, platform, scope, functionality). **Then the chat asks you only the most important questions** (at most 4: something only you have — a file, link, key, account or price; a PRD screen or feature, ads or payments added or dropped; a risk to your data or a PRD flow) in one message, each with numbered options, the recommended one first. Reply like `Q2: 1` or type your own answer. **With no reply in 5 minutes it continues with the recommended options.** Every other question is settled with its recommended option. All of them — asked or not, with every option and the one selected, and whether you chose it, the 5 minutes ran out or it was not asked — are in `DECISIONS.md`. **This is the only time you are asked anything.** (The Figma link question, when the PRD has none, waits for you: there is no default for a link.)
+2. As soon as you have answered (or after 5 minutes), the chat starts the build itself with your answers: it applies them to the contract, then runs to the end without asking anything. A choice an agent has to make that nothing covered is recorded as a `DECIDED` note and listed in `.pipeline/PROGRESS.md`. (To start the build by hand: `/app-factory:build-app {"stage":"build"}` — every question then keeps its recommended answer.)
+3. Watch: `/workflows` for the agent tree, `.pipeline/PROGRESS.md` for the live log, the Simulator window for the app.
+
+| Argument | Values | Default |
+|---|---|---|
+| `stage` | `contract`, `build`, `all` | `contract` |
+| `stack` | `flutter` (iOS + Android), `swiftui` (native iOS only) | `flutter` |
+| `parallel` | `true`: per feature group a logic builder, a UI builder and a flow-test writer work at the same time (Flutter). `false`: one builder per group. Testing runs in parallel either way | `true` |
+| `maxRounds` | gate rounds (integrator, then fixes) before testing is skipped | `3` |
+| `maxTestRounds` | test rounds (runners → fixers; senior QA once) before it stops | `3` |
+| `figma` | a `figma.com/design/...` link; without it a Figma link found in `PRD.md` is used, and with neither the chat asks for one | — |
+| `noFigma` | `true`: build without a Figma design (the answer to that question) | `false` |
+| `refreshDesign` | `true`: import the Figma design again (after the design changed) | `false` |
+| `root`, `flutter` | plugin folder, Flutter binary | paths in `build-app.js` |
+
+The run is finished when the workflow returns `done: true`: the gate passed, senior QA ran, the final audit passed, a separate agent's re-run of `design-check` and `assets` passed, no critical or major finding is open, and Android ran when the contract includes it. Blocked criteria don't stop it — they are listed for you. Otherwise it stops at a round cap, or when a round would re-run nothing because no code changed, with the open findings in `.pipeline/PROGRESS.md`.
+
+Files a run writes in the project: `design/` (the Figma design imported as it is through the Figma MCP — screens, flows, colours, assets, fonts, tokens, per-screen design data, and `reference/*.png` used only for the design comparison; nothing is built from a screenshot), `CONTRACT.md` (the spec — with its Missing keys section), `DECISIONS.md` (every question, its options and the selected one), the app, its tests (`integration_test/<group>_flow_test.dart` are the device flow tests), and `.pipeline/` (state, the live `PROGRESS.md` with timing, lessons, size, cleanup and the run report, screenshots). `pipeline.mjs stray` fails on any other new file, so agents keep scratch work outside the project. The project becomes a git repository with one commit per step; the test runners' `<project>.worktrees/` are removed after each round.
+
+## What has and has not been proven
+
+- Proven on real runs: contract stage and approval stop; Flutter serial build → audit → tests on iOS **and the Android emulator** (Live Street View v3: 38 agents, 17 h, ran to its end); a parallel run with three manual testers on three simulators at once (Invoice Maker: 259 agent-minutes in 106 minutes); break-it probes; per-write lock (20 concurrent writers).
+- The 0.18.0 flow — parallel build with a flow-test writer, the script gate, parallel iOS runners in worktrees, Android alongside the fixers, affected-only rounds, parallel senior QA, the final audit that fixes — has **not yet run on a real app**. It is checked by `scripts/simulate.mjs` (every control-flow path with fake agents) and the self-tests of `pipeline.mjs`, `firewall.mjs`, `run-report.mjs` and `assets.mjs`.
+- Not measured yet: three simulators running **while** three Xcode builds compile on this 8 GB Mac (the runner count follows free memory: 3 from 3,500 MB, 2 from 2,000 MB); whether the output firewall saves more context than the extra targeted reads it causes. The first run's report answers both.
+- The lessons step only proposes rules; nothing changes a skill without you.
+
+## Remove
+
+`claude` is not on PATH on this Mac; its full path is `~/.vscode/extensions/anthropic.claude-code-2.1.283-darwin-arm64/resources/native-binary/claude`.
+
+1. In each project folder: `claude plugin uninstall app-factory@app-factory-dev --scope project`.
+2. Once, after the last project: `claude plugin marketplace remove app-factory-dev`.
+3. The personal install command: `rm -r ~/.claude/skills/install-app-factory`.

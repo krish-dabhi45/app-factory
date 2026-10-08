@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Node (mobile-mcp is run via `npx -y`, so this only matters if something installs locally)
+node_modules/
+
+# Editor
+.vscode/
+.idea/
+
+# Local test/scratch runs of this plugin (a project built with app-factory lives outside this folder;
+# nothing here should ever produce a .pipeline/, but ignore it in case a manual test is run in place)
+.pipeline/
+*.log

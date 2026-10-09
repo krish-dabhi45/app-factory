@@ -96,6 +96,16 @@ x = await sim('faster start: batching, slim contract result, generated design do
 check(Object.entries(x.prompts).every(([, v]) => /Batch independent actions: reads, lookups/.test(v)), 'every agent prompt asks for independent actions in one turn')
 check(/The other 60 question\(s\) use their recommended option/.test(x.res.nextStep) && /\(Q3, Q9\)/.test(x.res.nextStep) && /Return in "questions" ONLY the questions whose ask is true/.test(x.prompts.contract), 'the contract returns only the asked questions; the chat counts the rest from questionCount')
 check(/design-docs\.mjs" slugs design/.test(x.prompts['design import']) && /design-docs\.mjs" build design/.test(x.prompts['design import']) && !/6\. Map everything, ONLY from the MCP responses/.test(x.prompts['design import']) && /assets\/<slug>-<the file name in the response>/.test(x.prompts['design import']), 'the import names files by slug and writes its documents with design-docs.mjs')
+x = await sim('stuck runs and layout checks in the build', { stage: 'build' })
+check(/stale "<the log>" --device S1 --platform ios --app x/.test(x.prompts['test r1 iOS runner 1']) && /device-reset <device> --platform android/.test(x.prompts['test r1 Android runner']) && /app-restart/.test(x.prompts['test r1 iOS runner 1']), 'every runner gets the check → app restart → device reset steps for its own device and app')
+check(/-r expanded --no-pub[^`]*\| tee "<your scratchpad>\/flow-S1\.log"/.test(x.prompts['test r1 iOS runner 1']) && /set -o pipefail/.test(x.prompts['test r1 iOS runner 1']), 'device flow tests print a line per test into a log per device')
+check(/layout-lint` \(sizes that cannot fit a 320×568 phone\)/.test(x.prompts['integrate + gate']), 'the gate runs the layout lint')
+x = await sim('explore by the design route', { stage: 'build' }, { 'setup (approved contract)': { claimed: true, projectDir: '/p/app', features: [{ id: 'AC1', title: 'a' }], groups: [{ name: 'items', criteria: ['AC1'] }], blocked: [], assumed: [], simulatorId: 'SIM1', hasDesign: true } })
+check(/read design\/ROUTE\.md .*follow ROUTE\.md screen by screen/.test(x.prompts.explore) && /Do not read PRD\.md whole/.test(x.prompts.explore), 'with a design, exploring follows ROUTE.md; the PRD is searched, not read whole')
+x = await sim('explore without a design', { stage: 'build' })
+check(/read CONTRACT\.md sections 1 \(Screens\) and 6 \(User flows\); visit the screens in the order/.test(x.prompts.explore) && !/ROUTE\.md/.test(x.prompts.explore.split('Read "')[0]), 'without a design, exploring follows the contract\'s screens and flows')
+x = await sim('import writes the route', { figma: 'https://www.figma.com/design/abc/x' })
+check(/ROUTE\.md \(the exploring plan/.test(x.prompts['design import']) && /"routeSkip"/.test(x.prompts['design import']), 'the design import builds ROUTE.md and lists mockup reactions to skip')
 x = await sim('contract stage, link given', { figma: 'https://www.figma.com/design/abc/x' })
 show(x); check(x.calls.includes('contract') && /"https:\/\/www\.figma\.com\/design\/abc\/x"/.test(x.prompts['design import']), 'imports the given link, then the contract')
 x = await sim('unattended (stage all) never asks', { stage: 'all' })
@@ -138,6 +148,19 @@ check(x.calls.includes('fix r1 logic') && x.calls.includes('fix r1 shared') && !
 check(x.calls.filter((c) => c === 'fix r1 logic').length === 1, 'a pending fix is not fixed twice')
 check(/--name '\\b\(AC1\)\\b'/.test(x.prompts['test r2 iOS runner 1']), 'round 2 runs only the affected tests')
 check(x.res.testRounds === 2 && x.res.done === true, 'clean after round 2')
+check(/affected --platform ios`/.test(x.prompts['test setup r2']) && /affected --platform android`/.test(x.prompts['test setup r2']), 'round 2 asks affected once per platform, since each one\'s last run')
+check(/LAUNCH CHECK FIRST/.test(x.prompts['test r1 Android runner']) && !/LAUNCH CHECK/.test(x.prompts['test r1 iOS runner 1']), 'the Android runner starts with a launch check')
+check(/app-factory: fix logic <X ids>/.test(x.prompts['fix r1 logic']), 'fixers name the findings they fixed in the commit')
+const two = (setup) => sim('round 2 per platform', { stage: 'build' }, {
+  'merge r1': (n) => (n === 1 ? { merged: [], rejected: [], ...found } : { merged: [], rejected: [], ...st(1) }),
+  'merge r2': { merged: [], rejected: [], ...st() },
+  'test setup r2': { base: 'B2', bundleId: 'x', shards: [['a'], ['b'], ['c']], runTests: true, ...setup },
+  'fix r1 logic': { fixed: ['X1'], pendingDevice: ['X2'], ...st(1) }, 'fix r1 shared': { fixed: [], pendingDevice: [], ...st(1) },
+})
+x = await two({ name: '', androidName: '\\b(AC7)\\b', runIos: false, runAndroid: true })
+check(!x.calls.some((c) => /^test r2 iOS/.test(c)) && /--name '\\b\(AC7\)\\b'/.test(x.prompts['test r2 Android runner']), 'nothing to re-run on iOS: no iOS runner; Android runs its own list')
+x = await two({ name: '\\b(AC1)\\b', androidName: '', runIos: true, runAndroid: false })
+check(x.calls.includes('test r2 iOS runner 1') && !x.calls.includes('test r2 Android runner'), 'nothing to re-run on Android: no Android runner that round')
 
 x = await sim('nothing changed but blockers remain → stop, not done', { stage: 'build' }, {
   'merge r1': { merged: [], rejected: [], ...st(1, { logic: 1, ui: 0, shared: 0, unrouted: 0 }) },

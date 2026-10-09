@@ -11,6 +11,9 @@
 //   group <name> <ACn...>  — a feature group (built and audited together)
 //   coverage [group] [--root <dir>] — fails unless every criterion that is not blocked has a test named after it
 //   affected <baseRef> [--root <dir>] — criteria whose code changed since baseRef (from the groups' commits) → the tests to re-run
+//   affected --platform ios|android [--root <dir>] — the same, per platform, since that platform's last run (its newest
+//                           "qa rN <platform> …" commit): fixes by their finding ids, test files the other platform changed,
+//                           this platform's native code / pubspec / main.dart (everything), and its open or pending findings
 //   shard <n> [--root <dir>]  — splits integration_test/*_test.dart across n runners by size (one JSON list per runner)
 //   assets [--root <dir>]     — app icon on every platform (exact sizes, opaque on iOS, not Flutter's default, Android adaptive icon)
 //                               and no @2x/@3x file loaded directly in lib/ (it would draw 2–3× too big)
@@ -19,6 +22,15 @@
 //   design-result <slug> <regions> <defects> [note...] — one comparison of the app's screen with its reference
 //   components <slug> <components.json>        — a screen's component inventory (design-components.mjs extract, or listed from a PRD mockup)
 //   component-results <slug> <results.json>    — per component: present (evidence) | missing (its DESIGN finding id) | excluded (the CONTRACT line)
+//   stale <log> [--minutes 10] [--device <udid|serial> --platform ios|android --app <bundle id|applicationId> --sdk <dir>]
+//                         — a device test run's log (flutter test -r expanded): finished, running, or stalled (no new
+//                           line for --minutes, the app process gone, or the device down), with the test and file it was on
+//   app-restart <udid|serial> --platform ios|android --app <id> [--sdk <dir>]
+//                         — the stuck run's first fix: stops the flutter test processes for that device and the app
+//   device-reset <udid|serial> --platform ios|android [--app <id>] [--sdk <dir>]
+//                         — the second fix, only for the plugin's own devices (app-factory-*, af-*): shut down (frees its
+//                           memory), wipe its data (simctl erase / emulator -wipe-data), boot again; prints the device
+//   layout-lint [--root <dir>] — lib/ui/ sizes that cannot fit every phone (build skill U15), unless marked // layout-ok: <why>
 //   design-check              — fails unless every referenced screen was compared, every one of its components checked and
 //                               present (or excluded by the contract), and no DESIGN finding is open
 //   decisions [--questions <json file>] [--answers <json file>] [--root <dir>]
@@ -51,7 +63,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
-import { execSync, execFileSync, spawnSync } from 'node:child_process'
+import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { secret, findPrd } from './secrets.mjs'
 import { find as findTools } from './configure.mjs'
@@ -344,6 +356,8 @@ function coverage(s, groupName, root) {
 // pubspec.yaml, a shared helper) affects every criterion. Prints the criteria and the --name regex for flutter test.
 function affected(s, a) {
   const i = a.indexOf('--root'), root = i >= 0 ? path.resolve(a[i + 1]) : process.cwd()
+  const pi = a.indexOf('--platform')
+  if (pi >= 0) return affectedOn(s, root, a[pi + 1])
   const base = a.filter((x, j) => j !== i && j !== i + 1)[0]
   if (!base) throw new Error('affected <baseRef> [--root <dir>]')
   const changed = [...new Set([...git(root, 'diff', '--name-only', base), ...git(root, 'ls-files', '--others', '--exclude-standard')])]
@@ -357,6 +371,45 @@ function affected(s, a) {
   if (shared.some((f) => !f.startsWith('test/'))) for (const f of s.features) ids.add(f.id) // a shared app file can affect anything
   const live = [...ids].filter((id) => s.features.find((f) => f.id === id)?.status !== 'blocked').sort((x, y) => Number(x.slice(2)) - Number(y.slice(2)))
   return JSON.stringify({ changed: changed.length, shared, criteria: live, name: live.length ? `\\b(${live.join('|')})\\b` : null })
+}
+
+// Per platform, since its last run. Replayed on v4's rounds 2 and 3: iOS would have run 10 and 14 of 20 flow tests
+// instead of all of them, Android all 20 both times (its native code changed) — and every bug those rounds found
+// (X74–X84) is in the tests it selects.
+const IGNORE = /^(test\/|design\/|\.pipeline\/|\.claude\/)|Podfile\.lock$|project\.pbxproj$|xcworkspace|^ios\/Flutter\/|local\.properties$/
+const fixIds = (subj) => { const m = subj.match(/^(?:app-factory: )?fix(?: (?:logic|ui|shared))?\s+((?:X\d+[\s,]*)+)/); return m ? m[1].match(/X\d+/g) : null }
+function affectedOn(s, root, platform) {
+  if (!['ios', 'android'].includes(platform)) throw new Error('affected --platform ios|android')
+  const other = platform === 'ios' ? 'android' : 'ios', mine = new RegExp(`^qa r\\d+ ${platform}\\b`), theirs = new RegExp(`^(qa r\\d+ ${other}\\b|merge qa-r\\d+-${other === 'android' ? 'android' : '\\d'})`)
+  const blocked = new Set(s.features.filter((f) => f.status === 'blocked').map((f) => f.id)), known = new Set(s.features.map((f) => f.id))
+  const live = (xs) => [...new Set(xs)].filter((id) => known.has(id) && !blocked.has(id)).sort((x, y) => Number(x.slice(2)) - Number(y.slice(2)))
+  const out = (all, ids, why) => JSON.stringify({ platform, since: last ? last.slice(0, 7) : null, all, why, criteria: all ? live(s.features.map((f) => f.id)) : live(ids), name: all ? '' : live(ids).length ? `\\b(${live(ids).join('|')})\\b` : null })
+  const lastLine = git(root, 'log', '--format=%H %s').find((l) => mine.test(l.slice(41)))
+  var last = lastLine ? lastLine.slice(0, 40) : null
+  if (!last) return out('the first run on this platform', [], [])
+  const findingAcs = (x) => { const f = s.findings.find((y) => y.id === x); return f ? [f.feature, ...[...String(f.text).matchAll(/\bAC\d+\b/g)].map((m) => m[0])].filter((v) => /^AC\d+$/.test(v || '')) : [] }
+  const ids = [], why = []
+  for (const f of git(root, 'diff', '--name-only', last, 'HEAD')) {
+    if (IGNORE.test(f) || !/^(lib|integration_test|assets|pubspec|ios|android)/.test(f)) continue
+    if (f.startsWith(`${other}/`)) continue // the other platform's native code cannot change this app
+    if (f.startsWith(`${platform}/`) || /^(pubspec\.(yaml|lock)|lib\/main\.dart)$/.test(f)) return out(`${f} changed`, [], [])
+    const subjects = git(root, 'log', '--format=%s', `${last}..HEAD`, '--', f)
+    if (f.startsWith('integration_test/')) {
+      if (subjects.every((x) => mine.test(x))) continue // only this platform's runner changed it: it passed here already
+      const t = fs.existsSync(path.join(root, f)) ? fs.readFileSync(path.join(root, f), 'utf8') : ''
+      ids.push(...[...acIds(t)]); why.push(`${f}: changed by ${subjects.filter((x) => !mine.test(x))[0]}`); continue
+    }
+    for (const subj of subjects) {
+      const g = (subj.match(/^app-factory: (?:logic|ui|tests|group) ([a-z0-9-]+)$/) || [])[1], xs = fixIds(subj)
+      if (g && (s.groups || {})[g]) { ids.push(...s.groups[g]); why.push(`${f}: group ${g}`) }
+      else if (xs) { for (const x of xs) ids.push(...findingAcs(x)); why.push(`${f}: fix ${xs.join(' ')}`) }
+      else return out(`${f} changed by "${subj}", which names no group or finding`, [], [])
+    }
+  }
+  // what failed here, or waits for its device proof here, runs again (a finding names its device)
+  const here = platform === 'ios' ? /\b(iOS|iPhone|simulator)\b/i : /\b(Android|emulator)\b/i, there = platform === 'ios' ? /\b(Android|emulator)\b/i : /\b(iOS|iPhone|simulator)\b/i
+  for (const f of s.findings.filter((f) => (f.status === 'open' || f.pending && f.status !== 'resolved') && f.severity !== 'minor' && (here.test(f.text) || !there.test(f.text)))) { ids.push(...findingAcs(f.id)); why.push(`${f.id}: open or pending`) }
+  return out(null, ids, why)
 }
 
 // pubspec.yaml packages and where they are used. A package nothing imports still ships in the app
@@ -614,7 +667,120 @@ function locked(fn) {
   }
 }
 
+// ── A stuck device test: detect it, then restart the app, then the device ──────────────────────────────────
+// v4: 12 device test commands ran into the 10-minute Bash limit; some were long and some were hung, and with
+// -r failures-only nothing in the log showed which. With -r expanded every test start and result is a line.
+const STALL_MIN = 10 // ponytail: longer than any single flow test seen in v4 (Android files of 1–3 tests: ~6 min each); raise per app if needed
+const DONE = /All tests passed!|Some tests failed\.|No tests ran|No tests were found|^exit=\d+/m
+const optOf = (a) => (k) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : null }
+function appAlive(platform, dev, app, sdk) {
+  if (!app || !dev) return null
+  if (platform === 'ios') return MAC ? run1('xcrun', ['simctl', 'spawn', dev, 'launchctl', 'list']).includes(`UIKitApplication:${app}`) : null
+  return sdk ? run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'pidof', app]).trim().length > 0 : null
+}
+function deviceUp(platform, dev, sdk) {
+  if (!dev) return null
+  if (platform === 'ios') return MAC ? run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(dev) : null
+  return sdk ? run1(sdkTool(sdk, 'adb'), ['-s', dev, 'get-state']).trim() === 'device' : null
+}
+export function staleOf(logText, idleMin, alive, up, minutes = STALL_MIN) {
+  const lines = logText.split('\n').map((l) => l.replace(/\r$/, '')).filter(Boolean)
+  const tests = lines.filter((l) => /^\d\d:\d\d \+\d+/.test(l)), loading = lines.filter((l) => /loading .*_test\.dart/.test(l))
+  const at = { test: (tests.at(-1) || '').replace(/^\d\d:\d\d \+\d+(?: ~\d+)?(?: -\d+)?: /, ''), file: ((loading.at(-1) || '').match(/(\S+_test\.dart)/) || [])[1] || null }
+  if (DONE.test(logText)) return { state: 'finished', ...at, last: lines.at(-1) || '' }
+  const started = tests.length > 0 // the build is over and a test is running
+  let why = null
+  if (up === false) why = 'the device is not running'
+  else if (started && alive === false && idleMin >= 2) why = 'the app is not running while a test is'
+  else if (idleMin >= minutes) why = `no new line for ${Math.round(idleMin)} min`
+  return { state: why ? 'stalled' : 'running', why, idleMinutes: Math.round(idleMin * 10) / 10, ...at, last: lines.at(-1) || '' }
+}
+function stale(a) {
+  const o = optOf(a), log = a[0]
+  if (!log) throw new Error('stale <log> [--minutes N] [--device <id> --platform ios|android --app <id> --sdk <dir>]')
+  const text = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '', idle = fs.existsSync(log) ? (Date.now() - fs.statSync(log).mtimeMs) / 60000 : 0
+  const platform = o('--platform') || 'ios', sdk = o('--sdk') || findTools().androidSdk
+  const res = staleOf(text, idle, appAlive(platform, o('--device'), o('--app'), sdk), deviceUp(platform, o('--device'), sdk), +(o('--minutes') || STALL_MIN))
+  if (res.state === 'stalled') res.next = 'stop this run: `app-restart`, then re-run only the file it was on, once; stalled again → `device-reset`, re-run once; stalled a third time → a major finding "hang" with this log, and go on with the next files'
+  return JSON.stringify(res)
+}
+// processes whose command line mentions this device and flutter (the stuck `flutter test … -d <device>`)
+function killFlutterFor(dev) {
+  const list = process.platform === 'win32'
+    ? run1('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'])
+    : run1('ps', ['-ax', '-o', 'pid=,command='])
+  const pids = list.split('\n').map((l) => l.trim().match(/^(\d+)\s+(.*)$/)).filter((m) => m && m[2].includes(dev) && /flutter/i.test(m[2]) && +m[1] !== process.pid).map((m) => +m[1])
+  for (const p of pids) { try { process.kill(p) } catch { /* already gone */ } }
+  return pids
+}
+const ownIos = (udid) => { const d = Object.values(JSON.parse(run1('xcrun', ['simctl', 'list', 'devices', '--json']) || '{"devices":{}}').devices).flat().find((x) => x.udid === udid); return d && d.name.startsWith('app-factory-') ? d : null }
+const avdOf = (sdk, serial) => run1(sdkTool(sdk, 'adb'), ['-s', serial, 'emu', 'avd', 'name']).split(/\r?\n/)[0].trim()
+function appRestart(a) {
+  const o = optOf(a), dev = a[0], platform = o('--platform'), app = o('--app'), sdk = o('--sdk') || findTools().androidSdk
+  if (!dev || !platform || !app) throw new Error('app-restart <udid|serial> --platform ios|android --app <id> [--sdk <dir>]')
+  const killed = killFlutterFor(dev)
+  if (platform === 'ios') { if (!MAC) throw new Error('iOS simulators exist only on macOS'); run1('xcrun', ['simctl', 'terminate', dev, app]) }
+  else run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'am', 'force-stop', app])
+  return `stopped ${killed.length} flutter process(es) for ${dev}${killed.length ? ` (${killed.join(', ')})` : ''} and the app ${app} — re-run only the file the stalled run was on`
+}
+function deviceReset(a) {
+  const o = optOf(a), dev = a[0], platform = o('--platform'), app = o('--app'), sdk = o('--sdk') || findTools().androidSdk
+  if (!dev || !platform) throw new Error('device-reset <udid|serial> --platform ios|android [--app <id>] [--sdk <dir>]')
+  const killed = killFlutterFor(dev)
+  if (platform === 'ios') {
+    if (!MAC) throw new Error('iOS simulators exist only on macOS')
+    const d = ownIos(dev); if (!d) throw new Error(`${dev} is not one of the plugin's simulators (app-factory-*) — never reset a user's device`)
+    run1('xcrun', ['simctl', 'shutdown', dev]); run1('xcrun', ['simctl', 'erase', dev]); run1('xcrun', ['simctl', 'boot', dev])
+    const up = run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(dev)
+    if (!up) throw new Error(`${d.name} did not boot again after the reset`)
+    return `reset ${d.name} (${dev}): ${killed.length} flutter process(es) stopped, shut down (its memory freed), erased (its apps and data removed), booted — reinstall happens on the next flutter test; for mobile-mcp run npx -y mobilecli agent install --device ${dev}`
+  }
+  if (!sdk) throw new Error('no Android SDK found — pass --sdk')
+  const avd = avdOf(sdk, dev); if (!avd.startsWith('af-')) throw new Error(`${dev} (${avd || 'unknown'}) is not one of the plugin's emulators (af-*) — never reset a user's device`)
+  if (app) run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'am', 'force-stop', app])
+  run1(sdkTool(sdk, 'adb'), ['-s', dev, 'emu', 'kill'])
+  for (let i = 0; i < 30 && run1(sdkTool(sdk, 'adb'), ['devices']).includes(dev); i++) sleepMs(1000)
+  // the emulator is the one process allowed to keep running (a window, like the Simulator app)
+  spawn(sdkTool(sdk, 'emulator'), ['-avd', avd, '-wipe-data', '-no-snapshot-load', '-no-audio'], { detached: true, stdio: 'ignore' }).unref()
+  run1(sdkTool(sdk, 'adb'), ['wait-for-device'], { timeout: 180000 })
+  let serial = ''
+  for (let i = 0; i < 150 && !serial; i++) { sleepMs(2000); serial = run1(sdkTool(sdk, 'adb'), ['devices']).split('\n').map((l) => l.split('\t')[0].trim()).find((x) => /^emulator-\d+$/.test(x) && avdOf(sdk, x) === avd && run1(sdkTool(sdk, 'adb'), ['-s', x, 'shell', 'getprop', 'sys.boot_completed']).trim() === '1') || '' }
+  if (!serial) throw new Error(`${avd} did not boot again within 5 minutes after the reset`)
+  return `reset ${avd}: ${killed.length} flutter process(es) stopped, emulator stopped (its memory freed), started with its data wiped, booted as ${serial} — use that serial from now on`
+}
+
+// ── Sizes that cannot fit every phone (build skill U15) ────────────────────────────────────────────────────
+// A literal wider than the smallest phone (320 pt) or taller than its screen (568 pt); a size computed from the screen
+// (U15.3: never scaled by the screen); a Positioned offset copied from the frame (U15.6). Marked lines are skipped:
+// `// layout-ok: <why>` on the line, or on the line before it.
+// ponytail: a text scan, not a Dart parser — it finds the patterns v4-style frame copies produce; T3 tests catch the rest
+export function layoutLint(files) {
+  const bad = []
+  for (const [f, text] of files) {
+    const lines = text.split('\n')
+    lines.forEach((l, i) => {
+      if (/layout-ok:/.test(l) || /layout-ok:/.test(lines[i - 1] || '')) return
+      const code = l.replace(/\/\/.*$/, '')
+      for (const m of code.matchAll(/\b(width|minWidth)\s*:\s*(\d+(?:\.\d+)?)/g)) if (+m[2] > 320) bad.push(`${f}:${i + 1}: ${m[1]}: ${m[2]} — wider than the smallest phone (320 pt): let it fill its parent (Expanded, double.infinity, constraints) or cap it with ConstrainedBox(maxWidth)`)
+      for (const m of code.matchAll(/\b(height|minHeight)\s*:\s*(\d+(?:\.\d+)?)/g)) if (+m[2] > 568) bad.push(`${f}:${i + 1}: ${m[1]}: ${m[2]} — taller than the smallest phone (568 pt): scroll, or size from the content`)
+      if (/MediaQuery\.(?:of\(context\)\.size|sizeOf\(context\))\.(?:width|height)\s*\*/.test(code) || /constraints\.max(?:Width|Height)\s*\*\s*0?\.\d/.test(code)) bad.push(`${f}:${i + 1}: a size scaled by the screen — U15.3: sizes are the design's points; a bigger screen shows more content`)
+      for (const m of code.matchAll(/Positioned\([^)]*\btop\s*:\s*(\d+(?:\.\d+)?)/g)) if (+m[1] > 200) bad.push(`${f}:${i + 1}: Positioned(top: ${m[1]}) — an offset copied from the frame (U15.6): lay it out in a Column, or place it from its nearest edge`)
+    })
+  }
+  return bad
+}
+function layoutLintCmd(root) {
+  const files = walk(root).filter((f) => f.startsWith('lib/ui/') && f.endsWith('.dart')).map((f) => [f, fs.readFileSync(path.join(root, f), 'utf8')])
+  const bad = layoutLint(files)
+  if (bad.length) throw new Error(`LAYOUT (${bad.length}) — sizes that cannot fit every phone (build skill U15):\n${bad.join('\n')}\nFix each, or mark a deliberate one with // layout-ok: <why>.`)
+  return `layout ok — ${files.length} file(s) in lib/ui/, no size that cannot fit a 320×568 phone`
+}
+
 function run([cmd, ...a]) {
+  if (cmd === 'stale') return stale(a)
+  if (cmd === 'app-restart') return appRestart(a)
+  if (cmd === 'device-reset') return deviceReset(a)
+  if (cmd === 'layout-lint') return layoutLintCmd(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'secret') return secret(a)
   if (cmd === 'scope') return scope(a)
   if (cmd === 'devices') return devices(a)
@@ -1116,6 +1282,26 @@ function selftest() {
   assert.deepEqual(JSON.parse(run(['affected', head, '--root', pa])).criteria, ['AC1', 'AC5', 'AC12'])
   execSync('git checkout -q -- .', { cwd: pa })
   assert.equal(JSON.parse(run(['affected', head, '--root', pa])).name, null)
+  // per platform, since its last run (earlier steps left open findings on AC1: they always re-run, so check the reasons)
+  const aff = (p) => JSON.parse(run(['affected', '--platform', p, '--root', pa]))
+  const because = (x, rx) => x.why.some((w) => rx.test(w))
+  put1('integration_test/items_test.dart', "testWidgets('F1 Items AC1', (t) async {});"); ci('qa r1 ios 1')
+  put1('integration_test/settings_test.dart', "testWidgets('F2 Settings AC5', (t) async {});"); ci('qa r1 android android')
+  let ia = aff('ios'), an = aff('android')
+  assert.ok(ia.criteria.includes('AC5') && because(ia, /settings_test\.dart: changed by qa r1 android/), 'iOS re-runs the test file Android changed')
+  assert.ok(!an.criteria.includes('AC5') && !because(an, /items_test|settings_test/), 'Android: its own test change already passed there; iOS\'s ran on Android in the same round')
+  run(['finding', 'add', 'AC7', 'major', '@ui', 'F3 Totals AC7: Device: iOS simulator, wrong total'])
+  const fid = JSON.parse(fs.readFileSync(path.join(dir(), 'state.json'), 'utf8')).findings.at(-1).id
+  run(['feature', 'AC7', 'failing', 'totals'])
+  ia = aff('ios'); an = aff('android')
+  assert.ok(ia.criteria.includes('AC7') && !an.criteria.includes('AC7'), 'an open finding seen on iOS re-runs on iOS only')
+  put1('lib/ui/items.dart', 'fixed'); ci(`app-factory: fix ui ${fid}`); run(['finding', 'resolve', fid, 'ok'])
+  ia = aff('ios'); an = aff('android')
+  assert.ok(ia.criteria.includes('AC7') && an.criteria.includes('AC7') && because(an, new RegExp(`fix ${fid}`)), 'a fix re-runs its finding\'s criteria on both platforms')
+  put1('android/app/src/main/kotlin/A.kt', 'k'); ci('app-factory: fix shared X999')
+  assert.deepEqual([aff('android').all, aff('ios').all], ['android/app/src/main/kotlin/A.kt changed', null], 'native Android code: everything on Android, nothing more on iOS')
+  put1('lib/ui/other.dart', 'x'); ci('tidy up')
+  assert.match(aff('ios').all, /names no group or finding/, 'an untraceable app change: everything')
 
   // deps: a package nothing imports is reported; SDK packages, dev tools used by analysis_options and the icon font rule are handled
   const app = fs.mkdtempSync(path.join(os.tmpdir(), 'deps-'))
@@ -1233,6 +1419,18 @@ flutter:
   assert.throws(() => run(['resume', '/p/s']), /not stopped with `stop`/)
   run(['devices', 'release', '/p/s']); run(['devices', 'claim', '/p/x'])
   assert.match(run(['stop', '/p/s']), /devices left alone — they are held by \/p\/x/)
+  // stale: a run that prints, finishes, hangs, or loses its app or device
+  const log = '00:00 +0: loading /p/integration_test/a_test.dart\nRunning Xcode build...\nXcode build done. 24.0s\n00:41 +0: F1 First launch AC1\n'
+  assert.equal(staleOf(log, 3, true, true).state, 'running')
+  assert.deepEqual([staleOf(log, 11, true, true).state, staleOf(log, 11, true, true).file, staleOf(log, 11, true, true).test], ['stalled', '/p/integration_test/a_test.dart', 'F1 First launch AC1'])
+  assert.match(staleOf(log, 2.5, false, true).why, /app is not running/)
+  assert.equal(staleOf('Running Xcode build...\n', 2.5, false, true).state, 'running', 'still building: no app yet is normal')
+  assert.match(staleOf(log, 0.5, true, false).why, /device is not running/)
+  assert.equal(staleOf(`${log}00:59 +1: All tests passed!\n`, 30, false, false).state, 'finished')
+  const sl = path.join(os.tmpdir(), `stale-${process.pid}.log`); fs.writeFileSync(sl, log); assert.equal(JSON.parse(run(['stale', sl])).state, 'running'); fs.rmSync(sl)
+  // layout-lint: frame copies flagged, normal sizes and marked lines not
+  const ll = layoutLint([['lib/ui/a.dart', ['SizedBox(width: 375, height: 44)', 'Container(height: 812)', 'width: MediaQuery.sizeOf(context).width * 0.12,', 'Positioned(top: 780, left: 16, child: b)', 'Positioned(top: 8, right: 8, child: badge)', 'SizedBox(width: 48, height: 48)', 'ConstrainedBox(constraints: BoxConstraints(maxWidth: 600)) // layout-ok: tablet cap', '// layout-ok: the map is full-bleed', 'SizedBox(height: 900)', 'ConstrainedBox(constraints: BoxConstraints(maxWidth: 342))'].join('\n')]])
+  assert.deepEqual(ll.map((x) => x.split(':')[1]), ['1', '2', '3', '4'])
   // portability: our glob matcher agrees with Node's path.matchesGlob on every pattern the plugin uses
   const pats = [...ALLOWED, 'integration_test/**', 'dart_test.yaml', 'ios/Podfile.lock', 'ios/Runner.xcworkspace/**', 'ios/Flutter/**', 'lib/domain/**', 'test/ui/**', 'lib/main.dart']
   const files = ['lib/a.dart', 'lib/ui/x/y.dart', 'libx/a.dart', 'test/ui/fits_screen.dart', 'integration_test/a_test.dart', 'dart_test.yaml', 'ios/Runner.xcworkspace/contents.xcworkspacedata', 'ios/Flutter/Generated.xcconfig', 'ios/Podfile.lock', 'design/screens/a.context.md', 'CONTRACT.md', 'notes.txt', 'scratch/t.txt', 'pubspec.yaml', '.gitignore', 'README.md', 'lib/main.dart', 'lib/domain/m.dart']

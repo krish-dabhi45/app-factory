@@ -239,6 +239,21 @@ It keeps the app's source and tests, PRD.md, CONTRACT.md, `design/` (with the or
 - **After the run:** the keys are removed from the coding agents' context only (table above); the app keeps them and builds with them as before. The chat you ran it in still holds a pasted key in its memory until it ends: start a new chat for the next work.
 - **Fewer paid calls** (build skill L13, T8): CONTRACT.md's "API calls" table gives each user action one request with exactly the fields the screens use (a field mask where the API has one), a cache for as long as the API's terms allow, debounced typing with a session token where the API bills per session, retries only on 429/5xx; each row has a test that counts the requests. Tests use recorded fixtures, never the paid API.
 
+## 9e. Notifications
+
+The plugin's own hook (`hooks/hooks.json` → `scripts/notify.mjs`, in the background) sends a desktop notification in every project the plugin is installed in:
+
+| When | Message |
+|---|---|
+| A permission prompt, a question dialog, or an agent needs your input | Claude Code's message |
+| A question dialog opens | the question |
+| app-factory asks its questions in the chat | "app-factory: questions are waiting — no reply in 5 minutes uses the recommended options" |
+| Claude finishes | "Finished — ready for your review" |
+
+macOS: alerter if installed (`brew install vjeantet/tap/alerter`; clicking it brings VS Code forward), otherwise the built-in notification; nothing is sent while VS Code or a terminal is the front window. Linux: `notify-send`. Windows: a PowerShell balloon. Without any of these, nothing is sent and nothing fails.
+
+It stays quiet while your own `~/.claude/settings.json` runs a notification hook (`attention.sh` or `notify.mjs`), because Claude Code runs plugin and settings hooks side by side and you would get each notification twice. On this Mac the old `attention.sh` entries were removed from `~/.claude/settings.json` on 2026-10-09, so the plugin's hook is the one that runs — in projects with the plugin only; other projects no longer get notifications. `scripts/attention.sh` is no longer used by anything.
+
 ## 10. Why a simple app is big
 
 Measured on this Mac: a brand-new Flutter app's release APK for current phones (arm64) is **14.8 MB**. Of that, 11.1 MB is the Flutter engine and 2 MB the Flutter framework, which every Flutter app carries; the app's own code was 2 KB. Removing the default `cupertino_icons` package (an icon font the app did not use) saved about 114 KB. A **debug** build is far bigger (172 MB for the Invoice Maker pilot) because it carries the debugging compiler and code for three processor types — it is never the size users download. The optimisation in the final audit can only shrink what is not fixed: packages, assets and fonts, and the app's own code.

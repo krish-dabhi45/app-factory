@@ -33,7 +33,8 @@ Future<void> pumpScreen(WidgetTester tester, ScreenCase c, Widget app, {double t
 
 /// The screen fits [c]: no overflow; every keyed element (AppKeys) can be scrolled into view and is then inside the
 /// screen; every key in [tappable] is inside the safe area (above the keyboard when one is open); with [fullText],
-/// no text is cut off — by maxLines, an ellipsis, a box too small for it, or a line too long — except [mayTruncate].
+/// no text is cut off — by maxLines, an ellipsis, a box too small for it, or a line too long — except [mayTruncate];
+/// no two keys in [tappable] partly overlap (one inside the other, a button on a card, is fine).
 Future<void> expectFitsScreen(WidgetTester tester, ScreenCase c,
     {List<Key> tappable = const [], bool fullText = true, List<String> mayTruncate = const []}) async {
   expect(tester.takeException(), isNull, reason: '${c.name}: overflow or layout error');
@@ -56,6 +57,17 @@ Future<void> expectFitsScreen(WidgetTester tester, ScreenCase c,
     if (tappable.contains(k)) {
       expect(safe.contains(r.topLeft) && safe.contains(r.bottomRight), isTrue,
           reason: '${c.name}: $k is under a system bar or the keyboard at $r (safe area $safe)');
+    }
+  }
+  // tap targets that partly cover each other: a tap meant for one lands on the other (v4: tab items overlapping by 11 pt)
+  final boxes = {for (final k in tappable) if (find.byKey(k).evaluate().length == 1) k: tester.getRect(find.byKey(k))};
+  final ks = boxes.keys.toList();
+  for (var i = 0; i < ks.length; i++) {
+    for (var j = i + 1; j < ks.length; j++) {
+      final a = boxes[ks[i]]!, b = boxes[ks[j]]!, o = a.intersect(b);
+      final nested = a.expandToInclude(b) == a || a.expandToInclude(b) == b;
+      expect(o.width > 0.5 && o.height > 0.5 && !nested, isFalse,
+          reason: '${c.name}: ${ks[i]} and ${ks[j]} overlap by ${o.width.toStringAsFixed(1)}×${o.height.toStringAsFixed(1)} pt');
     }
   }
   if (!fullText) return;

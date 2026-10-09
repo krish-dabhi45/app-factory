@@ -4,14 +4,16 @@
 //   node design-docs.mjs slugs <design dir>   → {"<frame id>": "<slug>"}: the names for screens/<slug>.context.md,
 //                                               reference/<slug>.png and assets/<slug>-<file> (one per inventory screen)
 //   node design-docs.mjs build <design dir>   → SCREENS.md, FLOWS.md, colors.json, COLORS.md, ASSETS.md, FONTS.md,
-//                                               MISSING.md, DESIGN.md, manifest.json; prints the counts
+//                                               MISSING.md, DESIGN.md, ROUTE.md, manifest.json; prints the counts
 //   node design-docs.mjs selftest
 // Reads: pages/*.metadata.xml (get_metadata, verbatim), pages/*.inventory.json (the use_figma inventories), tokens.json,
 // screens/<slug>*.context.md (get_design_context, verbatim), assets/, reference/, and design/import.json — the only
 // part an agent writes, because it needs judgement:
 //   {"url","fileKey","importedAt","figmaCalls","figmaCallsByTool":{},
 //    "prd":{"total":<screens PRD.md states>,"screens":[{"name":"Splash — 4.1","frames":["1:1548"]}, …]},
-//    "states":{"<frame id>":"loading"}, "prdColors":[{"name":"ink","value":"#0A1A1F","alpha":1,"use":"Primary text"}]}
+//    "states":{"<frame id>":"loading"}, "prdColors":[{"name":"ink","value":"#0A1A1F","alpha":1,"use":"Primary text"}],
+//    "routeSkip":["<element id, or an id prefix like I1:1601;>"]} — reactions on an illustration or mockup (a phone drawn
+//    inside a screen) that the app will not make tappable: ROUTE.md never routes through them
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -91,6 +93,47 @@ export function refs(code) {
     if (!/\/\s*>$/.test(attrs.trimEnd())) stack.push({ id })
   })
   return out
+}
+
+// The exploring route, from the design's own buttons: every screen in the order taps reach it from the start, the taps
+// that get there, and every other button on it with the screen it should open — so exploring follows a plan and checks
+// each navigation, instead of tapping around (v4: 171 turns, 59 screenshots, 75 taps, no map).
+// A tap is described by the button's text in the design code (what mobile_list_elements_on_screen shows) and its
+// centre in the frame, in points.
+export function route(screens, flows, nodes, ctx, label, keep = null, skip = []) {
+  const ids = screens.map((s) => s.id), inContract = (id) => !keep || keep.has(id)
+  const under = (id, el) => id === el || id.startsWith(`I${el};`) || (el.startsWith('I') && id.startsWith(`${el};`)) || (() => { for (let n = nodes[id]; n; n = nodes[n.parent]) if (n.id === el) return true; return false })()
+  const textOf = (sid, el) => [...new Set(ctx[sid].comps.filter((c) => c.kind === 'text' && under(c.id, el)).map((c) => c.text))].join(' / ')
+  const where = (el) => { const n = nodes[el]; return n ? `centre ${Math.round(n.ax + n.w / 2)},${Math.round(n.ay + n.h / 2)} pt, ${Math.round(n.w)}×${Math.round(n.h)}` : 'not in the metadata' }
+  const tap = (f) => { const t = textOf(f.from, f.elId); return `${f.trigger} ${t ? `"${t}"` : `"${f.el}" (no text)`} — ${f.el} ${f.elId}, ${where(f.elId)}` }
+  const skipped = (f) => skip.some((x) => f.elId === x || f.elId.startsWith(x))
+  const nav = flows.filter((f) => f.destId && ids.includes(f.destId) && f.destId !== f.from && !skipped(f))
+  const into = new Set(nav.map((f) => f.destId))
+  const starts = ids.filter((id) => !into.has(id)) // nothing leads to them: the launch screen, and screens only the app reaches
+  const path = {}, order = []
+  for (const st of starts.length ? starts : ids.slice(0, 1)) { // breadth first: the fewest taps to each screen
+    if (path[st]) continue
+    path[st] = []; order.push(st)
+    for (let q = [st]; q.length;) { const c = q.shift(); for (const f of nav.filter((x) => x.from === c)) { if (path[f.destId]) continue; path[f.destId] = [...path[c], f]; order.push(f.destId); q.push(f.destId) } }
+  }
+  // the first screen nothing leads to is where the app starts; any other such screen no button reaches (its own
+  // buttons are still planned — the app gets there some other way, or it is a finding)
+  const unreached = starts.slice(1)
+  const md = `# Route
+
+The exploring plan, built from the design's buttons (FLOWS.md): every screen in the order taps reach it, the taps that get there, and every button on it with the screen it should open. On the device, find a button by its text with mobile_list_elements_on_screen (the centre is in the design frame's points — a guide on another screen size). The app may add screens Figma does not draw (system prompts, consent, a paywall): handle them and go on. A screen CONTRACT.md leaves out is marked and skipped.
+
+${order.map((id, i) => `## ${i + 1}. ${label(id)}${inContract(id) ? '' : ' — not in CONTRACT.md: skip'}
+
+- Get there: ${path[id].length ? `${path[id][0].from !== starts[0] ? `(from ${label(path[id][0].from)}, which no button reaches) ` : ''}${path[id].map((f) => `on ${label(f.from)} ${tap(f)}`).join(' → ')}` : id === starts[0] ? 'the start screen — the app opens here' : 'no button in the design leads here: reach it as the app or CONTRACT.md says, or file a finding'}
+${(() => { const out = flows.filter((f) => f.from === id && !skipped(f)); return out.length ? `- Buttons here (tap each once; the result must match):
+${out.map((f) => `  - ${tap(f)} → ${f.action}${f.dest !== '—' ? ` ${f.dest}` : ''}${f.tr !== 'none' ? ` (${f.tr})` : ''}`).join('\n')}` : '- No button here has a reaction in the design.' })()}
+`).join('\n')}
+## Not reached by any button in the design
+
+${unreached.map((id) => `- ${label(id)}${inContract(id) ? ' — reach it as CONTRACT.md says, or file a finding' : ' — not in CONTRACT.md'}`).join('\n') || '- none'}
+`
+  return { md, reached: order.length, unreached }
 }
 
 export function build(dir) {
@@ -222,7 +265,9 @@ export function build(dir) {
     assets: [...new Map(assets.map((a) => [`${a.nodeId}|${a.source}`, { nodeId: a.nodeId, name: a.name, kind: a.kind, file: a.file === 'MISSING' ? 'MISSING' : `design/${a.file}` }])).values()],
     skipped, figmaCalls: imp.figmaCalls ?? null, figmaCallsByTool: imp.figmaCallsByTool ?? {} }
   W('manifest.json', JSON.stringify(manifest, null, 2))
-  return { unusedFiles: unused.length, screens: screens.length, prdScreens: prd.total ?? null, matchedScreens: matched, flows: flows.length, colors: colors.length, assets: assets.length, assetFiles: new Set(assets.filter((a) => a.file !== 'MISSING').map((a) => a.file)).size, missingAssets: missingAssets.length, missing: M.length, customFonts: custom, skipped: skipped.length }
+  const rt = route(screens, flows, nodes, ctx, label, imp.prd && imp.prd.screens ? new Set(imp.prd.screens.flatMap((p) => p.frames || [])) : null, imp.routeSkip || [])
+  W('ROUTE.md', rt.md)
+  return { routed: rt.reached, unrouted: rt.unreached.length, unusedFiles: unused.length, screens: screens.length, prdScreens: prd.total ?? null, matchedScreens: matched, flows: flows.length, colors: colors.length, assets: assets.length, assetFiles: new Set(assets.filter((a) => a.file !== 'MISSING').map((a) => a.file)).size, missingAssets: missingAssets.length, missing: M.length, customFonts: custom, skipped: skipped.length }
 }
 
 function selftest() {
@@ -270,6 +315,13 @@ function selftest() {
   assert.match(t('DESIGN.md'), /- Texts: "Welcome"/)
   const m = JSON.parse(t('manifest.json')); assert.deepEqual([m.screens[1].slug, m.screens[0].context, m.figmaCalls], ['home-1-5', ['design/screens/home.context.md'], 7])
   JSON.parse(t('colors.json'))
+  assert.match(t('ROUTE.md'), /## 1\. Home \(1:1\)\n\n- Get there: the start screen/)
+  assert.match(t('ROUTE.md'), /## 2\. Home \(1:5\)\n\n- Get there: on Home \(1:1\) tap "hero" \(no text\) — hero 1:4, centre 188,200 pt, 375×200/)
+  assert.match(t('ROUTE.md'), /- tap "hero" \(no text\) — hero 1:4, [^\n]*→ navigate Home \(1:5\) \(type DISSOLVE/)
+  // a reaction drawn in an illustration (routeSkip) is never routed through or listed as a button
+  fs.writeFileSync(path.join(d, 'import.json'), JSON.stringify({ ...JSON.parse(t('import.json')), routeSkip: ['1:4'] })); build(d)
+  assert.match(t('ROUTE.md'), /## 2\. Home \(1:5\)\n\n- Get there: no button in the design leads here/)
+  assert.doesNotMatch(t('ROUTE.md'), /tap "hero"/)
   return `selftest ok (${JSON.stringify(res)})`
 }
 

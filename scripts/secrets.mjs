@@ -30,7 +30,8 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 // Key formats published by their providers; a match in a file means a key was written where it must not be.
 // [label, regex, base name for import]; the value is the regex's group 1 when it has one, else the whole match.
@@ -52,7 +53,7 @@ const sourcesFile = (project) => secretsFile(project).replace(/\.json$/, '.sourc
 
 export function projectOf(cwd = process.cwd()) {
   if (process.env.PIPELINE_DIR) return path.dirname(path.resolve(process.env.PIPELINE_DIR))
-  const m = cwd.match(/^(.*)\.worktrees\/[^/]+(\/.*)?$/)
+  const m = cwd.match(/^(.*)\.worktrees[\\/][^\\/]+([\\/].*)?$/) // either separator: Windows paths use \\
   return m ? m[1] : cwd
 }
 const home = () => process.env.APP_FACTORY_HOME || path.join(os.homedir(), '.app-factory')
@@ -115,7 +116,7 @@ function importFile(project, file) {
   if (got.length) { writeSecure(secretsFile(project), all); writeSecure(sourcesFile(project), src) }
   // the file stays as the user wrote it; it must not reach git
   let tracked = false
-  try { execSync(`git ls-files --error-unmatch -- "${rel}"`, { cwd: project, stdio: 'ignore' }); tracked = true } catch { /* untracked or no repository */ }
+  try { execFileSync('git', ['ls-files', '--error-unmatch', '--', rel], { cwd: project, stdio: 'ignore' }); tracked = true } catch { /* untracked or no repository */ }
   if (Object.values(src).some((s) => s.startsWith(`${rel}:`)) && !tracked) {
     const gi = path.join(project, '.gitignore'), t = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : ''
     if (!t.split('\n').includes(rel)) fs.writeFileSync(gi, `${t}${t && !t.endsWith('\n') ? '\n' : ''}${rel}\n`)
@@ -190,7 +191,7 @@ function walk(root, rel = '', out = []) {
   let entries = []
   try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }) } catch { return out }
   for (const e of entries) {
-    const r = path.join(rel, e.name)
+    const r = rel ? `${rel}/${e.name}` : e.name // forward slashes on every OS (compared with paths like android/local.properties)
     if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(root, r, out) } else if (e.isFile()) out.push(r)
   }
   return out
@@ -331,7 +332,10 @@ function maskFile(f, vals) {
 export function transcriptDirs(project) {
   const slug = (p) => p.replace(/[^A-Za-z0-9]/g, '-')
   const real = (() => { try { return fs.realpathSync(project) } catch { return project } })()
-  const roots = [path.join(os.homedir(), '.claude', 'projects'), `/private/tmp/claude-${process.getuid?.() ?? ''}`, `/tmp/claude-${process.getuid?.() ?? ''}`]
+  // Claude Code's records: ~/.claude/projects/<slug>; its temp output: a claude* folder in the system temp folder
+  // (macOS /private/tmp/claude-<uid>, Linux /tmp/claude-<uid>) — searched, not assumed, so Windows' temp folder counts too
+  const temps = [...new Set(['/private/tmp', '/tmp', os.tmpdir()])].flatMap((t) => { try { return fs.readdirSync(t).filter((n) => n.startsWith('claude')).map((n) => path.join(t, n)) } catch { return [] } })
+  const roots = [path.join(os.homedir(), '.claude', 'projects'), ...temps]
   const out = new Set()
   for (const r of roots) {
     let names = []
@@ -368,7 +372,8 @@ export function secret([sub, ...a], stdin = () => fs.readFileSync(0, 'utf8')) {
     // one command with every stored key in its environment ($NAME), e.g. the single real call L13 allows; output redacted
     if (!a.length) throw new Error("run '<command using $NAME>'")
     let out
-    try { out = execSync(a.join(' '), { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, ...Object.fromEntries(values(project)) }, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64e6 }) }
+    // the command is written for a POSIX shell ($NAME): bash on Windows (Git Bash, which Claude Code uses there)
+    try { out = execSync(a.join(' '), { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, ...Object.fromEntries(values(project)) }, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64e6, shell: process.platform === 'win32' ? 'bash' : '/bin/sh' }) }
     catch (e) { throw new Error(redact(`${e.stdout || ''}${e.stderr || ''}` || e.message, needles(project))) }
     return redact(out, needles(project))
   }
@@ -523,6 +528,6 @@ function selftest() {
   return 'selftest ok'
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   try { const a = process.argv.slice(2); console.log(a[0] === 'selftest' ? selftest() : secret(a)) } catch (e) { console.error(`secrets: ${e.message}`); process.exit(1) }
 }

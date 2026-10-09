@@ -12,6 +12,7 @@
 // or contains it; every other component is left "check" for the auditor, who decides present / missing / excluded.
 import fs from 'node:fs'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
 const NAMED = [
   [/status ?bar|nav(igation)? ?bar|tab ?bar|tool ?bar|app ?bar|top ?bar|bottom ?bar|header|home indicator|botam line|bottom line/i, 'bar'],
@@ -125,7 +126,9 @@ Images and SVGs will be stored as constants, e.g. const image = \`\${assetPathPr
 }
 
 const [cmd, a1, a2, ...rest] = process.argv.slice(2)
-if (cmd === 'selftest') console.log(selftest())
+const direct = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+if (!direct) { /* imported (design-docs.mjs): no command line */ }
+else if (cmd === 'selftest') console.log(selftest())
 else if (cmd === 'extract' && a1) {
   const fi = [a2, ...rest].indexOf('--flows'), flowsFile = fi >= 0 ? [a2, ...rest][fi + 1] : null
   console.log(JSON.stringify(extract(fs.readFileSync(a1, 'utf8'), flowsFile && fs.existsSync(flowsFile) ? fs.readFileSync(flowsFile, 'utf8') : ''), null, 1))

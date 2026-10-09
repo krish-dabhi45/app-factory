@@ -11,6 +11,8 @@ Install the app-factory plugin into the current project. Do exactly this and not
    /Users/mach/testing/app-factory/install.sh "$PWD"
    ```
 
+   (On another computer, use the folder where app-factory is: `<that folder>/install.sh "$PWD"`. On Windows it runs in Git Bash, Claude Code's shell there.)
+
 2. Show the user the command's output.
    - If the last line starts with `installed.`, tell the user: "Reload this window (Cmd+Shift+P → Developer: Reload Window), start a new chat, then type /app-factory:build-app."
    - If any line starts with `error:`, show that line and stop. Do not try to fix it, and do not run any other install command.

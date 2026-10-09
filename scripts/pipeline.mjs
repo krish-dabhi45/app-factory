@@ -51,9 +51,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import { secret, findPrd } from './secrets.mjs'
+import { find as findTools } from './configure.mjs'
 
 const dir = () => path.resolve(process.env.PIPELINE_DIR || '.pipeline')
 const file = () => path.join(dir(), 'state.json')
@@ -170,20 +171,34 @@ function devices([sub, project]) {
 }
 
 const shell = (c, env = {}) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...env } }) } catch { return '' } }
+// git without a shell — the same on macOS, Linux and Windows (cmd.exe would keep quotes literally)
+const git = (root, ...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256e6 }).split('\n').map((l) => l.replace(/\r$/, '')).filter(Boolean)
+const gitQuiet = (root, ...args) => { try { return git(root, ...args) } catch { return [] } }
+const MAC = process.platform === 'darwin'
+const run1 = (cmd, args, opts = {}) => { try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], ...opts }) } catch { return '' } }
+// Android SDK tools: emulator and adb are .exe on Windows (found without the extension), avdmanager is a .bat
+const sdkTool = (sdk, t) => path.join(sdk, ...{ adb: ['platform-tools', 'adb'], emulator: ['emulator', 'emulator'], avdmanager: ['cmdline-tools', 'latest', 'bin', process.platform === 'win32' ? 'avdmanager.bat' : 'avdmanager'] }[t])
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+// Disk usage in KB, without du (Windows has none)
+const sizeKb = (p) => { let t = 0; const go = (q) => { let st; try { st = fs.lstatSync(q) } catch { return } if (st.isDirectory()) { for (const e of fs.readdirSync(q)) go(path.join(q, e)) } else t += st.size }; go(p); return Math.round(t / 1024) }
+// Glob → match, for the patterns the pipeline uses (**, *, ?, literal paths); path.matchesGlob needs a newer Node
+export const globMatch = (f, g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\u0000/g, '(?:.*/)?' ).replace(/\(\?:\.\*\/\)\?$/, '.*')}$`).test(f)
 
 // Stops the plugin's own devices — booted app-factory-* simulators and running af-* emulators — to free memory.
 // Deletes nothing; never touches another simulator or emulator. Returns what it stopped.
 function stopDevices(sdk) {
   const out = []
   if (process.env.APP_FACTORY_NO_DEVICES === '1') return out // self-test: never touch this Mac's devices
-  const booted = JSON.parse(shell('xcrun simctl list --json devices booted') || '{"devices":{}}').devices
-  for (const d of Object.values(booted).flat().filter((d) => d.name.startsWith('app-factory-'))) { shell(`xcrun simctl shutdown ${d.udid}`); out.push(`simulator ${d.name} shut down`) }
+  if (MAC) { // iOS simulators exist only on macOS
+    const booted = JSON.parse(run1('xcrun', ['simctl', 'list', '--json', 'devices', 'booted']) || '{"devices":{}}').devices
+    for (const d of Object.values(booted).flat().filter((d) => d.name.startsWith('app-factory-'))) { run1('xcrun', ['simctl', 'shutdown', d.udid]); out.push(`simulator ${d.name} shut down`) }
+  }
   if (sdk && fs.existsSync(sdk)) {
-    const adb = `"${sdk}/platform-tools/adb"`
-    const mine = shell(`${adb} devices`).split('\n').map((l) => l.split('\t')[0]).filter((x) => /^emulator-\d+$/.test(x))
-      .map((x) => [x, shell(`${adb} -s ${x} emu avd name`).split(/\r?\n/)[0].trim()]).filter(([, n]) => n.startsWith('af-'))
-    for (const [x, n] of mine) { shell(`${adb} -s ${x} emu kill`); out.push(`emulator ${n} stopped`) }
-    for (let i = 0; i < 30 && mine.some(([x]) => shell(`${adb} devices`).includes(x)); i++) shell('sleep 1') // wait until they have exited
+    const adb = sdkTool(sdk, 'adb')
+    const mine = run1(adb, ['devices']).split('\n').map((l) => l.split('\t')[0].trim()).filter((x) => /^emulator-\d+$/.test(x))
+      .map((x) => [x, run1(adb, ['-s', x, 'emu', 'avd', 'name']).split(/\r?\n/)[0].trim()]).filter(([, n]) => n.startsWith('af-'))
+    for (const [x, n] of mine) { run1(adb, ['-s', x, 'emu', 'kill']); out.push(`emulator ${n} stopped`) }
+    for (let i = 0; i < 30 && mine.some(([x]) => run1(adb, ['devices']).includes(x)); i++) sleepMs(1000) // wait until they have exited
   }
   return out
 }
@@ -198,7 +213,7 @@ function stopRun(a) {
   const f = deviceLock(), h = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null
   const heldDevices = Boolean(h && path.resolve(h.project) === project)
   const lines = []
-  if (heldDevices) { lines.push(...stopDevices(opt('--sdk'))); fs.rmSync(f, { force: true }); lines.push('device lock released') }
+  if (heldDevices) { lines.push(...stopDevices(opt('--sdk') || findTools().androidSdk)); fs.rmSync(f, { force: true }); lines.push('device lock released') }
   else lines.push(h ? `devices left alone — they are held by ${h.project}` : 'devices were not held by this run')
   const last = (s.timing || []).at(-1)
   if (last && !['end', 'stop'].includes(last.event)) { s.timing.push({ event: 'stop', at: now(), note: 'by the user' }); lines.push('timing: stopped') }
@@ -228,20 +243,21 @@ function cleanup(a) {
   const project = path.resolve(a[0] || '.')
   const real = fs.realpathSync(project)
   const opt = (f) => { const i = a.indexOf(f); return i >= 0 ? a[i + 1] : null }
-  const sh = (c, env = {}) => { try { return execSync(c, { cwd: project, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...env } }) } catch { return '' } }
-  const kb = (p) => (p && fs.existsSync(p) ? +sh(`du -sk "${p}"`).split('\t')[0] || 0 : 0)
+  const g = (...args) => gitQuiet(project, ...args)
+  const kb = (p) => (p && fs.existsSync(p) ? sizeKb(p) : 0)
   const gone = [], kept = []
   // 0. API keys: the run is over — the keys leave the coding agents' context (transcripts, temp output, .pipeline/); the app keeps them.
   const keys = (() => { const env = process.env.PIPELINE_DIR; process.env.PIPELINE_DIR = path.join(project, '.pipeline'); try { return secret(['forget']) } catch (e) { return `keys: ${e.message}` } finally { if (env === undefined) delete process.env.PIPELINE_DIR; else process.env.PIPELINE_DIR = env } })()
   const rm = (p, why) => { if (!fs.existsSync(p)) return; const k = kb(p); fs.rmSync(p, { recursive: true, force: true }); gone.push([path.relative(project, p) || p, k, why]) }
 
   // 1. Test worktrees (<project>.worktrees/<key>) and, when the run is done, their qa-r* branches.
-  for (const w of sh('git worktree list --porcelain').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)))
-    if (w.startsWith(`${real}.worktrees${path.sep}`) || w.startsWith(`${project}.worktrees${path.sep}`)) { const k = kb(w); sh(`git worktree remove --force "${w}"`); fs.rmSync(w, { recursive: true, force: true }); gone.push([w, k, 'test worktree']) }
-  sh('git worktree prune')
+  const fwd = (x) => x.replace(/\\/g, '/') // git prints forward slashes on every OS
+  for (const w of g('worktree', 'list', '--porcelain').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)))
+    if (fwd(w).startsWith(`${fwd(real)}.worktrees/`) || fwd(w).startsWith(`${fwd(project)}.worktrees/`)) { const k = kb(w); g('worktree', 'remove', '--force', w); fs.rmSync(w, { recursive: true, force: true }); gone.push([w, k, 'test worktree']) }
+  g('worktree', 'prune')
   rm(`${project}.worktrees`, 'test worktree folder')
   if (a.includes('--done'))
-    for (const b of sh("git branch --list 'qa-r*'").split('\n').map((l) => l.replace(/^[*+ ]+/, '').trim()).filter(Boolean)) { sh(`git branch -D "${b}"`); gone.push([`branch ${b}`, 0, 'test branch (merged, or its change filed as a finding)']) }
+    for (const b of g('branch', '--list', 'qa-r*').map((l) => l.replace(/^[*+ ]+/, '').trim()).filter(Boolean)) { g('branch', '-D', b); gone.push([`branch ${b}`, 0, 'test branch (merged, or its change filed as a finding)']) }
   else kept.push('qa-r* branches and .pipeline/screenshots — the run is not done; open findings point at them')
 
   // 2. Build output and caches: the next flutter / xcodebuild / gradle command makes them again.
@@ -253,7 +269,7 @@ function cleanup(a) {
   if (a.includes('--done')) rm(path.join(project, '.pipeline/screenshots'), 'tester screenshots (run done, no open finding)')
 
   // 4. Untracked files: backup and temp files go; anything else is listed, not deleted.
-  for (const f of sh('git ls-files --others --exclude-standard').split('\n').filter(Boolean))
+  for (const f of g('ls-files', '--others', '--exclude-standard'))
     if (/(\.(bak|orig|rej|tmp|swp)|~)$/.test(f)) rm(path.join(project, f), 'backup or temp file')
     else kept.push(`${f} — untracked and not a known leftover: check it`)
 
@@ -262,20 +278,21 @@ function cleanup(a) {
     const f = deviceLock(), h = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null
     if (!h || path.resolve(h.project) !== project) kept.push(`devices — the device lock is ${h ? `held by ${h.project}` : 'free'}, not by this project; none deleted`)
     else {
-      const sdk = opt('--sdk'), java = opt('--java')
+      const sdk = opt('--sdk') || findTools().androidSdk, java = opt('--java') || findTools().javaHome
       stopDevices(sdk)
-      const sims = JSON.parse(sh('xcrun simctl list devices --json') || '{"devices":{}}').devices
+      const sims = MAC ? JSON.parse(run1('xcrun', ['simctl', 'list', 'devices', '--json']) || '{"devices":{}}').devices : {}
       for (const d of Object.values(sims).flat().filter((d) => d.name.startsWith('app-factory-'))) {
         const k = kb(d.dataPath && path.dirname(d.dataPath))
-        sh(`xcrun simctl delete ${d.udid}`)
-        const still = sh('xcrun simctl list devices').includes(d.udid)
+        run1('xcrun', ['simctl', 'delete', d.udid])
+        const still = run1('xcrun', ['simctl', 'list', 'devices']).includes(d.udid)
         ;(still ? kept : gone).push(still ? `simulator ${d.name} — delete failed` : [`simulator ${d.name}`, k, 'plugin test device'])
       }
       if (sdk && fs.existsSync(sdk)) {
         const home = path.join(os.homedir(), '.android', 'avd')
-        for (const n of sh(`"${sdk}/emulator/emulator" -list-avds`).split('\n').map((l) => l.trim()).filter((l) => l.startsWith('af-'))) {
+        for (const n of run1(sdkTool(sdk, 'emulator'), ['-list-avds']).split('\n').map((l) => l.trim()).filter((l) => l.startsWith('af-'))) {
           const k = kb(path.join(home, `${n}.avd`))
-          sh(`echo | "${sdk}/cmdline-tools/latest/bin/avdmanager" delete avd -n ${n}`, java ? { JAVA_HOME: java } : {})
+          // a .bat needs a shell on Windows (Node refuses to start one without it)
+          run1(sdkTool(sdk, 'avdmanager'), ['delete', 'avd', '-n', n], { input: '\n', stdio: ['pipe', 'pipe', 'ignore'], shell: process.platform === 'win32', env: { ...process.env, ...(java ? { JAVA_HOME: java } : {}) } })
           const still = fs.existsSync(path.join(home, `${n}.avd`))
           ;(still ? kept : gone).push(still ? `emulator ${n} — delete failed` : [`emulator ${n}`, k, 'plugin test device'])
         }
@@ -295,7 +312,7 @@ function cleanup(a) {
 const SKIP = new Set(['.git', '.pipeline', '.dart_tool', 'build', 'Pods', 'node_modules', '.gradle', 'DerivedData'])
 function walk(root, rel = '', out = []) {
   for (const e of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
-    const r = path.join(rel, e.name)
+    const r = rel ? `${rel}/${e.name}` : e.name // forward slashes on every OS, like git
     if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(root, r, out) } else out.push(r)
   }
   return out
@@ -329,12 +346,11 @@ function affected(s, a) {
   const i = a.indexOf('--root'), root = i >= 0 ? path.resolve(a[i + 1]) : process.cwd()
   const base = a.filter((x, j) => j !== i && j !== i + 1)[0]
   if (!base) throw new Error('affected <baseRef> [--root <dir>]')
-  const sh = (c) => execSync(c, { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean)
-  const changed = [...new Set([...sh(`git diff --name-only ${base}`), ...sh('git ls-files --others --exclude-standard')])]
+  const changed = [...new Set([...git(root, 'diff', '--name-only', base), ...git(root, 'ls-files', '--others', '--exclude-standard')])]
     .filter((f) => /^(lib|integration_test|test|assets|pubspec\.yaml|ios|android)/.test(f))
   const groups = s.groups || {}, ids = new Set(), shared = []
   for (const f of changed) {
-    const names = new Set(sh(`git log --format=%s -- "${f}"`).map((m) => (m.match(/^app-factory: (?:logic|ui|tests|group) ([a-z0-9-]+)$/) || [])[1]).filter((g) => g && groups[g]))
+    const names = new Set(git(root, 'log', '--format=%s', '--', f).map((m) => (m.match(/^app-factory: (?:logic|ui|tests|group) ([a-z0-9-]+)$/) || [])[1]).filter((g) => g && groups[g]))
     if (!names.size) shared.push(f)
     for (const g of names) for (const id of groups[g]) ids.add(id)
   }
@@ -459,11 +475,10 @@ function decisions(root, a = []) {
 }
 
 function stray(root) {
-  const sh = (c) => execSync(c, { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean)
-  const base = sh("git log --format=%H --grep='^app-factory: baseline$'").pop()
+  const base = git(root, 'log', '--format=%H', '--grep=^app-factory: baseline$').pop()
   if (!base) return 'no "app-factory: baseline" commit — nothing to check'
-  const added = [...new Set([...sh(`git diff --name-only --diff-filter=A ${base}`), ...sh('git ls-files --others --exclude-standard')])]
-  const bad = added.filter((f) => !ALLOWED.some((g) => path.matchesGlob(f, g)))
+  const added = [...new Set([...git(root, 'diff', '--name-only', '--diff-filter=A', base), ...git(root, 'ls-files', '--others', '--exclude-standard')])]
+  const bad = added.filter((f) => !ALLOWED.some((g) => globMatch(f, g)))
   if (bad.length) throw new Error(`STRAY FILES (${bad.length}) — not part of the app, its tests, CONTRACT.md or design/: ${bad.join(', ')}. Delete them (git rm -q <file>, or rm for an untracked one); keep notes in your reply or in a finding, scratch work outside the project.`)
   return `no stray files (${added.length} added since the baseline, all allowed)`
 }
@@ -534,8 +549,12 @@ function assetsCheck(root) {
 
 // The simulator type whose screen is exactly W×H points, among those the installed iOS runtime supports
 // (sizes from each device type's profile: mainScreenWidth/Height ÷ mainScreenScale). @3x preferred.
-function designDevice(w, h, list = null) {
+function designDevice(w, h, list = null, android = !MAC) {
   if (!(w > 0) || !(h > 0)) throw new Error('design-device <W> <H> (points)')
+  // No iOS simulator outside macOS: an Android emulator whose screen is exactly W×H dp — density 480 (3 px per dp),
+  // set in the AVD's config.ini (hw.lcd.width/height/density, the emulator's hardware-properties.ini).
+  if (android) return JSON.stringify({ name: `af-design-${Math.round(w)}x${Math.round(h)}`, android: true, density: 480, widthPx: Math.round(w) * 3, heightPx: Math.round(h) * 3,
+    configIni: { 'hw.lcd.width': Math.round(w) * 3, 'hw.lcd.height': Math.round(h) * 3, 'hw.lcd.density': 480 } })
   const types = list || (() => {
     const rt = JSON.parse(execSync('xcrun simctl list runtimes -j', { encoding: 'utf8' })).runtimes.filter((r) => r.platform === 'iOS' && r.isAvailable).pop()
     if (!rt) throw new Error('no iOS simulator runtime installed')
@@ -562,11 +581,11 @@ function shard(n, root) {
 // Changed files since baseRef (committed, staged, unstaged, untracked) that match none of the allowed globs.
 function scope([base, ...globs]) {
   if (!base || !globs.length) throw new Error('scope <baseRef> <glob...>')
-  const sh = (c) => execSync(c, { encoding: 'utf8' }).split('\n').filter(Boolean)
+  const cwd = process.cwd()
   const changed = base.includes('..') // a branch, before merging it: its committed changes only
-    ? sh(`git diff --name-only ${base.replace('..', ' ')}`)
-    : [...new Set([...sh(`git diff --name-only ${base}`), ...sh('git ls-files --others --exclude-standard')])]
-  const outside = changed.filter((f) => !globs.some((g) => path.matchesGlob(f, g)))
+    ? git(cwd, 'diff', '--name-only', ...base.split('..'))
+    : [...new Set([...git(cwd, 'diff', '--name-only', base), ...git(cwd, 'ls-files', '--others', '--exclude-standard')])]
+  const outside = changed.filter((f) => !globs.some((g) => globMatch(f, g)))
   if (outside.length) throw new Error(`OUT OF SCOPE (${outside.length}): ${outside.join(', ')} — allowed: ${globs.join(' ')}. Revert these: git checkout ${base} -- <file> (or delete a new file).`)
   return `in scope: ${changed.length} changed file(s), all within ${globs.join(' ')}`
 }
@@ -623,6 +642,16 @@ function run([cmd, ...a]) {
     return 'released'
   }
   if (cmd === 'prd') return findPrd(path.dirname(dir()))
+  // the machine: iOS (simulators, Xcode builds) only on macOS with Xcode's command-line tools
+  if (cmd === 'host') return JSON.stringify({ os: process.platform, ios: MAC && !spawnSync('xcrun', ['--version'], { stdio: 'ignore' }).error })
+  // memory the test devices can use, in MB: macOS free + inactive pages (vm_stat), Linux MemAvailable, Windows free physical memory
+  if (cmd === 'freemem') {
+    if (MAC) { const v = run1('vm_stat', []), pg = +(v.match(/page size of (\d+)/) || [, 4096])[1], n = (k) => +((v.match(new RegExp(`${k}:\\s+(\\d+)`)) || [, 0])[1]); return String(Math.round(((n('Pages free') + n('Pages inactive')) * pg) / 1048576)) }
+    if (process.platform === 'linux') { const m = fs.readFileSync('/proc/meminfo', 'utf8').match(/MemAvailable:\s+(\d+) kB/); if (m) return String(Math.round(+m[1] / 1024)) }
+    return String(Math.round(os.freemem() / 1048576))
+  }
+  // free disk space in GB where the project is (df's flags differ between systems; Windows has none)
+  if (cmd === 'freedisk') { const st = fs.statfsSync(path.resolve(a[0] || '.')); return String(Math.floor((st.bavail * st.bsize) / 1073741824)) }
   if (cmd === 'init') {
     a[0] ||= findPrd(path.dirname(dir()))
     fs.mkdirSync(dir(), { recursive: true })
@@ -1204,6 +1233,13 @@ flutter:
   assert.throws(() => run(['resume', '/p/s']), /not stopped with `stop`/)
   run(['devices', 'release', '/p/s']); run(['devices', 'claim', '/p/x'])
   assert.match(run(['stop', '/p/s']), /devices left alone — they are held by \/p\/x/)
+  // portability: our glob matcher agrees with Node's path.matchesGlob on every pattern the plugin uses
+  const pats = [...ALLOWED, 'integration_test/**', 'dart_test.yaml', 'ios/Podfile.lock', 'ios/Runner.xcworkspace/**', 'ios/Flutter/**', 'lib/domain/**', 'test/ui/**', 'lib/main.dart']
+  const files = ['lib/a.dart', 'lib/ui/x/y.dart', 'libx/a.dart', 'test/ui/fits_screen.dart', 'integration_test/a_test.dart', 'dart_test.yaml', 'ios/Runner.xcworkspace/contents.xcworkspacedata', 'ios/Flutter/Generated.xcconfig', 'ios/Podfile.lock', 'design/screens/a.context.md', 'CONTRACT.md', 'notes.txt', 'scratch/t.txt', 'pubspec.yaml', '.gitignore', 'README.md', 'lib/main.dart', 'lib/domain/m.dart']
+  if (typeof path.matchesGlob === 'function') for (const g of pats) for (const f of files) assert.equal(globMatch(f, g), path.matchesGlob(f, g), `${f} ~ ${g}`)
+  const host = JSON.parse(run(['host'])); assert.equal(host.os, process.platform); assert.equal(typeof host.ios, 'boolean')
+  assert.ok(+run(['freemem']) > 0 && +run(['freedisk', os.tmpdir()]) >= 0)
+  assert.deepEqual(JSON.parse(designDevice(375, 812, null, true)).configIni, { 'hw.lcd.width': 1125, 'hw.lcd.height': 2436, 'hw.lcd.density': 480 })
   return 'selftest ok'
 }
 

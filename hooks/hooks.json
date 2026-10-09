@@ -1,19 +1,27 @@
 {
-  "description": "app-factory: in an app-factory project, replaces stored API key values and known key patterns in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents (subagents during an active run only); native macOS banner + chime when Claude needs input or finishes, only while the editor isn't frontmost",
+  "description": "app-factory: desktop notification when Claude needs you or has finished (macOS, Linux, Windows; quiet while your own notification hook is set); replaces stored API key values in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents",
   "hooks": {
     "PostToolUse": [
       {
         "matcher": "Bash|Read|Grep",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/firewall.mjs\"", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/firewall.mjs\"",
+            "timeout": 10
+          }
         ]
       }
     ],
     "Notification": [
       {
-        "matcher": "permission_prompt|elicitation_dialog",
+        "matcher": "permission_prompt|elicitation_dialog|agent_needs_input",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/attention.sh\"", "async": true }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.mjs\"",
+            "async": true
+          }
         ]
       }
     ],
@@ -21,14 +29,22 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/attention.sh\"", "async": true }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.mjs\"",
+            "async": true
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/attention.sh\"", "async": true }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.mjs\"",
+            "async": true
+          }
         ]
       }
     ]

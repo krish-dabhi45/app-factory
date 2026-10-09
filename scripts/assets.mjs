@@ -9,8 +9,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execFile } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
+import { dims as headerDims } from './png.mjs'
 
 const run = promisify(execFile)
 const RASTER = /\.(png|jpe?g|gif)$/i
@@ -80,10 +81,8 @@ export function keepScale(uses, iw, ih, dpr, maxWidth) {
 
 // ── Encoding ────────────────────────────────────────────────────────────
 
-async function dims(f) {
-  const { stdout } = await run('sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', f])
-  return [+stdout.match(/pixelWidth: (\d+)/)[1], +stdout.match(/pixelHeight: (\d+)/)[1]]
-}
+// From the file header (PNG, JPEG, GIF, WebP) — no system tool, so it works on every OS.
+async function dims(f) { const d = headerDims(fs.readFileSync(f)); return [d.w, d.h] }
 
 // Total frame time of a GIF (ms), from its graphic control extensions.
 function gifMs(buf) {
@@ -123,8 +122,9 @@ async function pool(items, n, fn) {
 // ── Main ────────────────────────────────────────────────────────────────
 
 async function main(dir, opts) {
-  for (const t of ['cwebp', 'gif2webp', 'webpmux', 'sips'])
-    try { await run('which', [t]) } catch { console.error(`missing ${t} — brew install webp`); process.exit(2) }
+  // libwebp's tools: macOS `brew install webp`; Debian/Ubuntu `apt install webp`; Windows: Google's libwebp binaries on PATH
+  for (const t of ['cwebp', 'gif2webp', 'webpmux'])
+    if (spawnSync(t, ['-version'], { stdio: 'ignore' }).error) { console.error(`missing ${t} — install libwebp: brew install webp (macOS), apt install webp (Debian/Ubuntu), or Google's libwebp binaries on PATH (Windows)`); process.exit(2) }
   const assets = path.join(dir, 'assets'), originals = path.join(dir, 'originals')
   const sizes = {}
   for (const f of fs.readdirSync(path.join(dir, 'pages')).filter((f) => f.endsWith('.xml')))

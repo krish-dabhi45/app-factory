@@ -10,16 +10,48 @@
 // and below 1024 px --allow-upscale — both are the user's choices, asked upfront; never decided by an agent.
 //   node app-icon.mjs <project> --none "<Q id>"   — no icon file was given and the user (or the recommended option) chose to
 //     keep Flutter's default icon for now: touches no icon, records the choice for `pipeline.mjs assets`.
+//   node app-icon.mjs inspect <image>  → {"w","h","alpha","transparentCorners","corner"}
 //   node app-icon.mjs selftest
+// Rendering: macOS uses app-icon.swift (Core Graphics); Linux and Windows use png.mjs (PNG sources only).
+// APP_FACTORY_IMAGES=node forces the Node renderer anywhere (the self-test compares the two on macOS).
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import * as png from './png.mjs'
 
-const SWIFT = path.join(path.dirname(new URL(import.meta.url).pathname), 'app-icon.swift')
+const SWIFT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'app-icon.swift')
 const swift = (...a) => execFileSync('swift', [SWIFT, ...a], { encoding: 'utf8' }).trim()
+const useSwift = () => process.platform === 'darwin' && process.env.APP_FACTORY_IMAGES !== 'node'
+const readPng = (f) => { try { return png.decode(fs.readFileSync(f)) } catch (e) { throw new Error(`${f}: ${e.message} — on this system the icon must be a PNG file`) } }
+const hex = (c) => `#${[0, 1, 2].map((k) => c[k].toString(16).padStart(2, '0').toUpperCase()).join('')}`
+const rgb = (h) => { const v = parseInt(String(h).replace('#', ''), 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255] }
+
+// Same answers as app-icon.swift's inspect: the corner colour is premultiplied, as Core Graphics reads it.
+export function inspect(file) {
+  if (useSwift()) return JSON.parse(swift('inspect', file))
+  const im = readPng(file), at = (x, y) => im.data.subarray((y * im.w + x) * 4, (y * im.w + x) * 4 + 4)
+  const corners = [at(0, 0), at(im.w - 1, 0), at(0, im.h - 1), at(im.w - 1, im.h - 1)], c = corners[0]
+  return { w: im.w, h: im.h, alpha: im.alpha, transparentCorners: corners.some((p) => p[3] < 255), corner: hex([0, 1, 2].map((k) => Math.round((c[k] * c[3]) / 255))) }
+}
+
+// Same jobs as app-icon.swift's render: src scaled to size×fraction, centred (moved dx right, dy down) on a size×size
+// canvas filled with fill (or white when opaque, else transparent); opaque writes no alpha channel.
+export function render(jobs) {
+  if (useSwift()) { const jf = path.join(os.tmpdir(), `app-icon-${process.pid}.json`); fs.writeFileSync(jf, JSON.stringify(jobs)); try { swift('render', jf) } finally { fs.rmSync(jf, { force: true }) } return }
+  const cache = {}
+  for (const j of jobs) {
+    const src = (cache[j.src] ||= readPng(j.src))
+    const canvas = png.blank(j.size, j.size, j.fill ? [...rgb(j.fill), 255] : j.opaque ? [255, 255, 255, 255] : [0, 0, 0, 0])
+    const d = Math.round(j.size * (j.fraction ?? 1)), o = Math.round((j.size - d) / 2)
+    png.over(canvas, png.resize(src, d, d), o + Math.round(j.dx || 0), o + Math.round(j.dy || 0))
+    fs.mkdirSync(path.dirname(j.out), { recursive: true })
+    fs.writeFileSync(j.out, png.encode(canvas, { opaque: Boolean(j.opaque) }))
+  }
+}
 const DENSITY = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 }
 const SAFE = 66 / 108
 
@@ -65,13 +97,10 @@ export function plan(project, o, info) {
 }
 
 function run(project, o) {
-  const info = JSON.parse(swift('inspect', o.source))
+  const info = inspect(o.source)
   const { jobs, fill } = plan(project, o, info)
   if (!jobs.length) throw new Error(`no ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json and no android/app/src/main/res in ${project}`)
-  const jf = path.join(os.tmpdir(), `app-icon-${process.pid}.json`)
-  fs.writeFileSync(jf, JSON.stringify(jobs))
-  swift('render', jf)
-  fs.rmSync(jf)
+  render(jobs)
   // the record `pipeline.mjs assets` checks: the icons must be exactly what this script made, from this source
   const md5 = (f) => (fs.existsSync(f) ? crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex') : null)
   const made = Object.fromEntries(jobs.map((j) => [path.relative(project, j.out), md5(j.out)]))
@@ -96,16 +125,18 @@ function selftest() {
     { size: '20x20', idiom: 'iphone', filename: 'Icon-App-20x20@3x.png', scale: '3x' },
     { size: '83.5x83.5', idiom: 'ipad', filename: 'Icon-App-83.5x83.5@2x.png', scale: '2x' },
     { size: '1024x1024', idiom: 'ios-marketing', filename: 'Icon-App-1024x1024@1x.png', scale: '1x' }], info: { version: 1 } }))
-  // sources: a 1024 opaque square, and a 360 logo with transparent corners (like v3's appLogo)
-  const jobs = [{ src: '/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns', out: path.join(tmp, 'full.png'), size: 1024, fraction: 1, fill: '#336699', opaque: true },
-    { src: '/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns', out: path.join(tmp, 'logo.png'), size: 360, fraction: 0.8, fill: null, opaque: false }]
-  fs.writeFileSync(path.join(tmp, 'j.json'), JSON.stringify(jobs)); swift('render', path.join(tmp, 'j.json'))
-  const logo = JSON.parse(swift('inspect', path.join(tmp, 'logo.png')))
+  // sources, made here so the test runs on every system: a 1024 opaque square (#336699 with a white mark), and a
+  // 360 logo whose corners are transparent (a disc, like v3's pre-rounded appLogo)
+  const full = png.blank(1024, 1024, [0x33, 0x66, 0x99, 255]); png.over(full, png.blank(400, 400, [255, 255, 255, 255]), 312, 312)
+  fs.writeFileSync(path.join(tmp, 'full.png'), png.encode(full, { opaque: true }))
+  const disc = png.blank(360, 360); for (let y = 0; y < 360; y++) for (let x = 0; x < 360; x++) if ((x - 179.5) ** 2 + (y - 179.5) ** 2 < 170 ** 2) disc.data.set([200, 40, 40, 255], (y * 360 + x) * 4)
+  fs.writeFileSync(path.join(tmp, 'logo.png'), png.encode(disc))
+  const logo = inspect(path.join(tmp, 'logo.png'))
   assert.deepEqual([logo.w, logo.transparentCorners], [360, true])
   assert.throws(() => run(proj, { source: path.join(tmp, 'logo.png') }), /iOS needs 1024×1024/)
   assert.throws(() => run(proj, { source: path.join(tmp, 'logo.png'), allowUpscale: true }), /transparent corners/)
   assert.match(run(proj, { source: path.join(tmp, 'full.png') }), /app icon: 13 images from full.png \(1024 px\); Android adaptive background #336699/)
-  const ins = (f) => JSON.parse(swift('inspect', f))
+  const ins = (f) => inspect(f)
   assert.deepEqual([ins(path.join(set, 'Icon-App-83.5x83.5@2x.png')).w, ins(path.join(set, 'Icon-App-83.5x83.5@2x.png')).alpha], [167, false]) // 83.5 × 2, opaque
   assert.equal(ins(path.join(set, 'Icon-App-1024x1024@1x.png')).alpha, false)
   const fg = ins(path.join(proj, 'android/app/src/main/res/drawable-xxxhdpi/ic_launcher_foreground.png'))
@@ -119,15 +150,28 @@ function selftest() {
   assert.throws(() => none(proj), /needs the question id/)
   assert.match(none(proj, 'Q4'), /Flutter's default icon kept \(Q4\)/)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(proj, '.pipeline/app-icon.json'), 'utf8')), { none: true, decision: 'Q4' })
+  // on macOS: the Node renderer (used on Linux and Windows) gives the same icons as Core Graphics
+  if (useSwift()) {
+    const jobs = [{ src: path.join(tmp, 'logo.png'), size: 432, fraction: 66 / 108, fill: null, opaque: false }, { src: path.join(tmp, 'full.png'), size: 167, fraction: 1, fill: '#FFFFFF', opaque: true }]
+    const a = jobs.map((j, i) => ({ ...j, out: path.join(tmp, `cg${i}.png`) })), b = jobs.map((j, i) => ({ ...j, out: path.join(tmp, `nd${i}.png`) }))
+    render(a); process.env.APP_FACTORY_IMAGES = 'node'; try { render(b) } finally { delete process.env.APP_FACTORY_IMAGES }
+    for (let i = 0; i < jobs.length; i++) {
+      const x = png.decode(fs.readFileSync(a[i].out)), y = png.decode(fs.readFileSync(b[i].out))
+      assert.deepEqual([y.w, y.h, y.alpha], [x.w, x.h, x.alpha])
+      let sum = 0; for (let k = 0; k < x.data.length; k++) sum += Math.abs(x.data[k] - y.data[k])
+      assert.ok(sum / x.data.length < 2, `Node and Core Graphics icons differ by ${(sum / x.data.length).toFixed(2)} per channel on average`)
+    }
+  }
   return 'selftest ok'
 }
 
 const argv = process.argv.slice(2)
 if (argv[0] === 'selftest') console.log(selftest())
+else if (argv[0] === 'inspect' && argv[1]) console.log(JSON.stringify(inspect(argv[1])))
 else if (argv[0] && argv.includes('--none')) {
   try { console.log(none(path.resolve(argv[0]), argv[argv.indexOf('--none') + 1])) } catch (e) { console.error(`app-icon: ${e.message}`); process.exit(1) }
 } else if (argv[0] && argv.includes('--source')) {
   const opt = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined }
   try { console.log(run(path.resolve(argv[0]), { source: path.resolve(opt('--source')), fill: opt('--fill'), foreground: opt('--foreground') && path.resolve(opt('--foreground')), allowUpscale: argv.includes('--allow-upscale') })) }
   catch (e) { console.error(`app-icon: ${e.message}`); process.exit(1) }
-} else { console.error('usage: app-icon.mjs <project> --source <png> [--fill #RRGGBB] [--foreground <png>] [--allow-upscale] | <project> --none <Q id> | selftest'); process.exit(2) }
+} else { console.error('usage: app-icon.mjs <project> --source <png> [--fill #RRGGBB] [--foreground <png>] [--allow-upscale] | <project> --none <Q id> | inspect <image> | selftest'); process.exit(2) }

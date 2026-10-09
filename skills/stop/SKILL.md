@@ -14,10 +14,10 @@ Stop the app-factory run. Do exactly these steps, in order, and nothing else.
 **3. Free what it held**, with the Bash tool, from the project folder:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline.mjs" stop "<project folder>" --run <run ID> --sdk "$HOME/Library/Android/sdk"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline.mjs" stop "<project folder>" --run <run ID>
 ```
 
-(If the run was started with an `androidSdk` arg, pass that path to `--sdk` instead.) It records the stop in the run's timing, shuts down the plugin's own `app-factory-*` simulators and `af-*` emulators — only if this run held the device lock, never any other device, and it deletes none — and releases the device lock and the run lock. It keeps the code and its git history, `.pipeline/` state, test worktrees and branches, and screenshots.
+(It finds the Android SDK the same way the installer did — ANDROID_HOME, ANDROID_SDK_ROOT, or Android Studio's default folder on macOS, Linux or Windows. If the run was started with an `androidSdk` arg, add `--sdk "<that path>"`.) It records the stop in the run's timing, shuts down the plugin's own `app-factory-*` simulators and `af-*` emulators — only if this run held the device lock, never any other device, and it deletes none — and releases the device lock and the run lock. It keeps the code and its git history, `.pipeline/` state, test worktrees and branches, and screenshots.
 
 **4. Tell the user,** in this order: the lines the command printed, exactly; then "To continue later, say 'continue the app-factory run' in this chat."
 

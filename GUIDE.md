@@ -5,6 +5,23 @@ Sections 1 and 2, and the per-project uninstall in section 8, were run on this m
 
 ## 1. Before you start
 
+**Systems.** macOS builds and tests the iOS and the Android app. **Linux and Windows build and test the Android app only**: iOS builds and simulators need Xcode, which runs only on macOS. There, the run tells you so at the start and at the end (`iOS: not built or tested`), every device step (explore, flow tests, senior QA, the design check) runs on the Android emulator, and the SwiftUI stack stops at once. On Windows, Claude Code runs commands in Git Bash, so `install.sh` and the agents' commands run there; install Git for Windows if Claude Code asks for it.
+
+| Needed off macOS | Notes |
+|---|---|
+| Node.js 18.15 or newer, npx, git | as on macOS |
+| Flutter on PATH | `flutter.bat` on Windows is found too |
+| Android SDK with `emulator`, `platform-tools` and `cmdline-tools/latest` | found from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or Android Studio's default folder (`~/Android/Sdk` on Linux, `%LOCALAPPDATA%\Android\Sdk` on Windows) |
+| Java 17 (`JAVA_HOME`) | `avdmanager` needs it |
+| libwebp tools (`cwebp`, `gif2webp`, `webpmux`) on PATH | `apt install webp` on Debian/Ubuntu; Google's libwebp binaries on Windows |
+| An x86_64 or arm64 Android system image | the installer picks the one matching the CPU |
+
+`install.sh` runs `scripts/configure.mjs`, which writes what it found into the workflow and prints a WARNING for anything missing.
+
+**Not tested on a real Linux or Windows machine yet:** the Node parts are checked on macOS (the self-tests run the Linux/Windows image code and compare it with Core Graphics; the workflow simulation runs the whole flow as a Linux and as a Windows machine). Starting `.bat` tools (`avdmanager.bat`, `flutter.bat`) from Git Bash and the emulator on those systems are not yet seen working.
+
+### On macOS
+
 | Needed | Check with | On this Mac |
 |---|---|---|
 | Claude Code extension in VS Code, signed in | Claude Code panel opens and answers | 2.1.283 |
@@ -61,7 +78,7 @@ Running it again is safe. Anything starting with `error:` means it stopped and n
 
 ### Figma design (optional)
 
-Put the Figma link (`https://www.figma.com/design/...`) in `PRD.md`, or pass it as `"figma"` in step 1. On the first call, one agent imports the whole design as it is into `design/`, through the Figma MCP, before anything else happens:
+Put the Figma link (`https://www.figma.com/design/...`) in `PRD.md`, or pass it as `"figma"` in step 1. The import saves Figma's answers as they are, writes one small `design/import.json` (which PRD screen each frame shows, the PRD's colours), and `scripts/design-docs.mjs` writes every mapping document from them — no agent-written generator. On the first call, one agent imports the whole design as it is into `design/`, through the Figma MCP, before anything else happens:
 
 - **Screens** (`SCREENS.md`): each page's layer structure with every position and size, and each screen's design data and Figma reference code — then **cross-checked against the PRD**: the number of screens the PRD states (state it in the PRD, e.g. "12 screens", or list them) against the Figma screens, matched by name and content, with every screen only in one of them, and every screen missing its design data, screenshot or inventory, listed. Totals appear in the run log: "PRD 12 · Figma 11 · matched 10".
 - **Flows** (`FLOWS.md`): every prototype interaction — element, trigger, destination — read from the file with read-only `use_figma` calls. Also listed: elements that look interactive but lead nowhere, and screens nothing leads to.

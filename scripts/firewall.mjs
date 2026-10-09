@@ -17,7 +17,7 @@ const CAP = 8192 // bytes
 const HEAD = 20, TAIL = 10
 
 export function project(cwd) {
-  const m = cwd && cwd.match(/^(.*)\.worktrees\/[^/]+(\/.*)?$/)
+  const m = cwd && cwd.match(/^(.*)\.worktrees[\\/][^\\/]+([\\/].*)?$/) // either separator: Windows paths use \\
   for (const root of [cwd, m && m[1]].filter(Boolean)) if (fs.existsSync(path.join(root, '.pipeline', 'RUN.lock'))) return root
   return null
 }

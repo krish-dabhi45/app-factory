@@ -9,6 +9,7 @@ import path from 'node:path'
 import os from 'node:os'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const slug = (p) => p.replace(/[/.]/g, '-')
 const min = (ms) => Math.round(ms / 60000)
@@ -156,5 +157,5 @@ else if (a0) {
   if (!dir) { console.error(`no workflow run found for ${path.resolve(a0)}`); process.exit(1) }
   const text = `Run ${path.basename(dir)}\n${render(measure(dir), path.join(path.resolve(a0), '.pipeline', 'tool-output', 'log.tsv'))}`
   console.log(text)
-  if (rest.includes('--save')) execFileSync('node', [path.join(path.dirname(new URL(import.meta.url).pathname), 'pipeline.mjs'), 'report', 'run', text], { cwd: path.resolve(a0), stdio: 'inherit' })
+  if (rest.includes('--save')) execFileSync('node', [path.join(path.dirname(fileURLToPath(import.meta.url)), 'pipeline.mjs'), 'report', 'run', text], { cwd: path.resolve(a0), stdio: 'inherit' })
 } else { console.error('usage: run-report.mjs <project dir> [--run wf_…] [--save] | selftest'); process.exit(2) }

@@ -220,7 +220,7 @@ The run's last step runs `pipeline.mjs cleanup` (a script, not an agent); its re
 | Deleted | Why it is safe |
 |---|---|
 | Test worktrees `<project>.worktrees/*` | their changes were merged, or filed as findings |
-| `build/`, `.dart_tool/`, `coverage/`, `ios/build/`, `android/.gradle/`, `android/app/build/` | build output and caches; the next `flutter` command makes them again (on Live Street View they were 14.7 GB) |
+| `build/`, `.dart_tool/`, `coverage/`, `ios/build/`, `ios/Pods/`, `android/.gradle/`, `android/build/`, `android/app/build/` | build output and caches, every one git-ignored; the next `flutter` command makes them again (on Live Street View they were 14.7 GB; `ios/Pods/`, kept until 0.29.1, was another 169 MB there). `ios/Pods/` comes back on the next iOS build: Flutter runs `pod install` when `Pods/Manifest.lock` is missing |
 | `.pipeline/probe-backup/` | copies made by the audit's break-it probes |
 | Untracked `*.bak`, `*.orig`, `*.rej`, `*.tmp`, `*.swp`, `*~`; `.pipeline/tool-output/` | backup and temp files, and command outputs the firewall cut; any other untracked file is listed, not deleted |
 | Only when the run is done: `.pipeline/screenshots/` and the `qa-r*` branches | a run that is not done keeps them as evidence for its open findings |
@@ -263,9 +263,9 @@ The plugin's `PreToolUse` hook (`hooks/hooks.json` → `scripts/guard.mjs`) chec
 | Root | `sudo`, `doas`, `pkexec`, `su` |
 | Power | `reboot`, `shutdown`, `poweroff`, `halt`, `init 0/6`, `systemctl` (except `status`/`show`/`is-active`/`list-units`), `loginctl terminate…`, `launchctl reboot`, System Events restart |
 | Kernel memory | `drop_caches`, `sysrq`, any write into `/proc` or `/sys`, `sysctl -w`, `swapoff`, `swapon`, `mkswap`, `purge` |
-| Processes | `pkill`, `killall`, `xargs kill`, `kill` of -1, 0, 1, a process group or a computed list (`$(pgrep …)`) |
+| Processes | `pkill`, `killall`, `xargs kill`, `kill` of -1, 0, 1, a process group or a computed list (`$(pgrep …)`). Allowed: `kill` of a literal pid, one variable (`$!`, `$PID`) or a job (`%1`) — an agent's own background process |
 | Disks | `rm -r` of `/`, `~` or `$HOME`, `--no-preserve-root`, `mkfs`, `fdisk`, `dd of=/dev/…`, `chmod/chown -R /`, a fork bomb |
-| Devices | `simctl delete/erase`, `simctl shutdown all`, `avdmanager delete` (only `pipeline.mjs cleanup` and `device-reset` may, and only the plugin's own) |
+| Devices | `simctl delete/erase`, `simctl shutdown all`, `avdmanager delete`, and `rm` of `~/Library/Developer/CoreSimulator` or `~/.android` (every simulator's and emulator's files) — only `pipeline.mjs cleanup` and `device-reset` delete devices, and only the plugin's own |
 
 What the agents do instead: free memory only by stopping the plugin's own devices (`app-factory-…` simulators, `af-…` emulators); a stuck app or device → `pipeline.mjs app-restart`, then `device-reset`, which stop only `flutter test` processes for that device (matched by its exact id and the flutter tool, never the agent's own shell). Before an emulator starts, `pipeline.mjs freemem --need 2500` fails on Linux and Windows when less memory is available (the emulator alone takes 2 GB: `hw.ramSize=2G`) — nothing is started and a critical finding is filed. On macOS it only reports, because macOS compresses memory (v4 ran the emulator at 1,839 MB free). Unit and widget tests run with `-j 4`: without it `flutter test` starts one test process per two CPU cores, and up to three agents test at once.
 

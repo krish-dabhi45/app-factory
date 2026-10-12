@@ -273,7 +273,7 @@ function cleanup(a) {
   else kept.push('qa-r* branches and .pipeline/screenshots — the run is not done; open findings point at them')
 
   // 2. Build output and caches: the next flutter / xcodebuild / gradle command makes them again.
-  for (const d of ['build', '.dart_tool', 'coverage', 'ios/build', 'android/.gradle', 'android/app/build']) rm(path.join(project, d), 'build output or cache — recreated by the next build')
+  for (const d of ['build', '.dart_tool', 'coverage', 'ios/build', 'ios/Pods', 'android/.gradle', 'android/app/build', 'android/build']) rm(path.join(project, d), 'build output or cache — recreated by the next build')
 
   // 3. Pipeline leftovers.
   rm(path.join(project, '.pipeline/probe-backup'), 'break-it probe copies')
@@ -1404,11 +1404,11 @@ flutter:
   put('lib/main.dart')
   g('git init -q && git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t commit -qm base')
   g(`git worktree add -q "${proj}.worktrees/ui" -b qa-r1-ui`)
-  for (const f of ['build/ios/x', '.dart_tool/flutter_build/y', 'coverage/lcov.info', '.pipeline/probe-backup/a.dart', '.pipeline/screenshots/s.png', '.pipeline/state.json', 'lib/view.dart.bak', 'notes.txt']) put(f)
+  for (const f of ['build/ios/x', '.dart_tool/flutter_build/y', 'coverage/lcov.info', 'ios/Pods/Manifest.lock', 'android/build/x', 'android/app/build/y', '.pipeline/probe-backup/a.dart', '.pipeline/screenshots/s.png', '.pipeline/state.json', 'lib/view.dart.bak', 'notes.txt']) put(f)
   assert.match(run(['cleanup', proj]), /cleanup: freed/) // not done: evidence stays
   assert.ok(fs.existsSync(path.join(proj, '.pipeline/screenshots/s.png')) && /qa-r1-ui/.test(execSync("git branch --list 'qa-r*'", { cwd: proj, encoding: 'utf8' })))
   assert.match(run(['cleanup', proj, '--done']), /cleanup: freed .* — deleted \d+ item/)
-  for (const f of ['build', '.dart_tool', 'coverage', '.pipeline/probe-backup', '.pipeline/screenshots', 'lib/view.dart.bak']) assert.ok(!fs.existsSync(path.join(proj, f)), `${f} should be gone`)
+  for (const f of ['build', '.dart_tool', 'coverage', 'ios/Pods', 'android/build', 'android/app/build', '.pipeline/probe-backup', '.pipeline/screenshots', 'lib/view.dart.bak']) assert.ok(!fs.existsSync(path.join(proj, f)), `${f} should be gone`)
   assert.ok(!fs.existsSync(`${proj}.worktrees`), 'worktree folder should be gone')
   for (const f of ['lib/main.dart', '.pipeline/state.json', 'notes.txt']) assert.ok(fs.existsSync(path.join(proj, f)), `${f} should stay`)
   assert.equal(execSync("git branch --list 'qa-r*'", { cwd: proj, encoding: 'utf8' }).trim(), '')

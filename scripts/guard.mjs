@@ -7,10 +7,12 @@
 //   power:      reboot, shutdown, poweroff, halt, telinit, init 0/6, systemctl (except status/show/is-active/list-units),
 //               loginctl terminate/kill/poweroff/reboot, launchctl reboot/bootout, System Events restart/shut down
 //   kernel:     drop_caches, sysrq, writes into /proc or /sys, sysctl -w/-p/x=y, swapoff, swapon, mkswap, purge
-//   processes:  pkill, killall, killall5, xkill, xargs kill, kill of -1/0/1/a process group/a computed list
+//   processes:  pkill, killall, killall5, xkill, xargs kill, kill of -1/0/1/a process group/a computed list ($(…));
+//               kill of a literal pid, one variable ($!, $PID) or a job (%1) — the agent's own process — is allowed
 //   disks:      rm -r of /, /*, ~ or $HOME, --no-preserve-root, mkfs, fdisk, parted, wipefs, dd of=/dev/, > /dev/<disk>,
 //               chmod/chown -R on /, a fork bomb
-//   devices:    simctl delete/erase, simctl shutdown all, avdmanager delete (only pipeline.mjs cleanup/device-reset may)
+//   devices:    simctl delete/erase, simctl shutdown all, avdmanager delete (only pipeline.mjs cleanup/device-reset may),
+//               rm of ~/Library/Developer/CoreSimulator or ~/.android (every simulator's and emulator's files)
 //   node guard.mjs            (reads the hook JSON on stdin)
 //   node guard.mjs selftest
 import fs from 'node:fs'
@@ -46,6 +48,7 @@ export function refuse(cmd) {
   if (/\bdd\b[^;&|\n]*\bof=\/dev\//.test(b) || />\s*\/dev\/(?:sd|nvme|hd|vd|disk|mmcblk)/.test(b)) return 'disks'
   if (/:\(\)\s*\{[^}]*:\s*\|\s*:/.test(raw)) return 'processes'
   if (/\bSystem Events\b[^\n]*\b(?:restart|shut down|log out)\b/i.test(raw)) return 'power'
+  if (/\brm\b[^;&|\n]*(?:Library\/Developer\/CoreSimulator|(?:^|[\s"'\/~}])\.android(?:\/|[\s"']|$))/.test(raw)) return 'devices' // every simulator's or emulator's files
   if (/\bsimctl\s+(?:delete|erase)\b|\bsimctl\s+shutdown\s+all\b|\bavdmanager(?:\.bat)?\s+(?:-\S+\s+)*delete\b/.test(b)) return 'devices'
   if (/\bxargs\b[^;&|\n]*\bkill\b/.test(b)) return 'processes'
   for (let seg of b.split(/\|\||&&|[;|&\n(`]|\$\(/)) {
@@ -61,7 +64,8 @@ export function refuse(cmd) {
     if (/^(?:pkill|killall|killall5|xkill)$/.test(cmd0)) return 'processes'
     if (cmd0 === 'kill') {
       const ids = args.filter((x, i) => !(i === 0 && /^-(?:\w+|\d+)$/.test(x)) && x !== '--' && !/^-[sn]$/.test(x) && !(i > 0 && /^-[sn]$/.test(args[i - 1])))
-      if (!ids.length || ids.some((x) => !/^\d+$/.test(x) || +x <= 1)) return 'processes' // -1, 0, 1, -<group>, $(…), %job
+      // its own process: a literal pid above 1, one shell variable ($!, $PID) or a job (%1) — never -1, 0, 1, -<group> or $(…)
+      if (!ids.length || ids.some((x) => !(/^\d+$/.test(x) ? +x > 1 : /^(?:\$!|\$\{?[A-Za-z_]\w*\}?|%\d+)$/.test(x)))) return 'processes'
     }
   }
   return null
@@ -85,13 +89,13 @@ export function guard(input) {
 function selftest() {
   const no = ['sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"', 'sync && echo 3 | tee /proc/sys/vm/drop_caches', 'echo 1 > /proc/sys/vm/compact_memory',
     'sudo swapoff -a && sudo swapon -a', 'swapoff -a', 'sysctl -w vm.swappiness=10', 'sysctl vm.overcommit_memory=2', 'purge', 'echo b > /proc/sysrq-trigger',
-    'pkill -f qemu', 'pkill -9 java', 'killall Simulator', 'kill -9 -1', 'kill -- -1', 'kill 1', 'kill -9 $(pgrep -f flutter)', 'pgrep java | xargs kill -9', 'kill %1',
+    'pkill -f qemu', 'pkill -9 java', 'killall Simulator', 'kill -9 -1', 'kill -- -1', 'kill 1', 'kill -9 $(pgrep -f flutter)', 'pgrep java | xargs kill -9', 
     'reboot', 'shutdown -h now', 'systemctl restart gdm', 'systemctl suspend', 'init 6', 'loginctl terminate-user mach', "osascript -e 'tell app \"System Events\" to restart'",
     'rm -rf /', 'rm -rf ~', 'rm -rf "$HOME"', 'rm -rf /*', 'rm -r --no-preserve-root /x', 'chmod -R 777 /', 'dd if=/dev/zero of=/dev/sda', 'mkfs.ext4 /dev/sdb1',
     ':(){ :|:& };:', 'xcrun simctl delete all', 'xcrun simctl erase 1234', 'xcrun simctl shutdown all', 'avdmanager delete avd -n af-standard',
-    'bash -c "sudo reboot"', 'FOO=1 nohup sudo -n true', 'cd /x && timeout 5 killall adb', 'nice -n 10 pkill dart', 'env X=1 swapoff -a']
+    'bash -c "sudo reboot"', 'rm -rf ~/Library/Developer/CoreSimulator', 'rm -rf "$HOME/Library/Developer/CoreSimulator/Devices"', 'rm -rf ~/.android', 'rm -r /Users/u/.android/avd/x.avd', 'kill $(pgrep qemu)', 'kill `pgrep java`', 'FOO=1 nohup sudo -n true', 'cd /x && timeout 5 killall adb', 'nice -n 10 pkill dart', 'env X=1 swapoff -a']
   const yes = ['node /p/scripts/pipeline.mjs device-reset emulator-5554 --platform android', 'node /p/scripts/pipeline.mjs freemem --need 2500', 'cat /proc/meminfo', 'grep MemAvailable /proc/meminfo',
-    'xcrun simctl shutdown 1234-ABCD', 'xcrun simctl boot 1234', '/sdk/platform-tools/adb -s emulator-5554 emu kill', 'adb -s emulator-5554 shell am force-stop com.x.app', 'kill 48213', 'kill -TERM 48213 48214',
+    'xcrun simctl shutdown 1234-ABCD', 'xcrun simctl boot 1234', '/sdk/platform-tools/adb -s emulator-5554 emu kill', 'adb -s emulator-5554 shell am force-stop com.x.app', 'kill 48213', 'kill $!', 'kill -9 $FLOW_PID', 'kill ${PID}', 'kill %1', 'rm -rf android/.gradle', 'ls ~/.android/avd', 'kill -TERM 48213 48214',
     'git commit -m "fix: reboot loop; shutdown sheet; sudo text"', 'echo "never run sudo"', 'rm -rf build/ .dart_tool', 'rm -rf "$TMPDIR/x"', 'rm -rf ~/x/y', 'flutter test -j 4 -r failures-only --no-pub',
     'systemctl status docker', "cat <<'EOF' > notes.txt\nreboot\nsudo x\nEOF", 'ls /sys/class', 'sysctl -n hw.memsize', 'vm_stat', 'grep -rn "pkill" lib/']
   for (const c of no) assert.ok(refuse(c), `should refuse: ${c}`)

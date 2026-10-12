@@ -82,7 +82,7 @@ You may change only the files your prompt says you own. For each fix:
 2. Reproduce it with a test that FAILS — a unit or widget test whenever the cause can be reached without a device (most can); named after the criterion (`'AC9 discount over amount blocks save'`).
 3. Fix the cause — the smallest change in your own files. No refactors, renames, formatting or "while I'm here" edits, and no new behaviour the contract does not have. Never fix a PROPOSAL.
 4. `P scope <base> <your globs>` must print "in scope" (a fixer with its own paths); revert anything it lists.
-5. `flutter analyze` and `flutter test -r failures-only --no-pub` pass — not only your test.
+5. `flutter analyze` and `flutter test -j 4 -r failures-only --no-pub` pass — not only your test.
 6. Commit only your files (the command your prompt gives).
 7. Resolve it (section 6).
 

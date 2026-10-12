@@ -1,5 +1,5 @@
 {
-  "description": "app-factory: desktop notification when Claude needs you or has finished (macOS, Linux, Windows; quiet while your own notification hook is set); replaces stored API key values in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents",
+  "description": "app-factory: refuses system commands that can freeze or crash the computer in an app-factory project (sudo, drop_caches, swapoff, pkill/killall, reboot, disk and device wipes); desktop notification when Claude needs you or has finished (macOS, Linux, Windows; quiet while your own notification hook is set); replaces stored API key values in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents",
   "hooks": {
     "PostToolUse": [
       {
@@ -26,6 +26,16 @@
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/guard.mjs\"",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "AskUserQuestion",
         "hooks": [

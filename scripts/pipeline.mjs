@@ -695,6 +695,22 @@ export function staleOf(logText, idleMin, alive, up, minutes = STALL_MIN) {
   else if (idleMin >= minutes) why = `no new line for ${Math.round(idleMin)} min`
   return { state: why ? 'stalled' : 'running', why, idleMinutes: Math.round(idleMin * 10) / 10, ...at, last: lines.at(-1) || '' }
 }
+// Memory the test devices can use, in MB: macOS free + inactive pages (vm_stat), Linux MemAvailable, Windows free physical memory.
+function memFree() {
+  if (MAC) { const v = run1('vm_stat', []), pg = +(v.match(/page size of (\d+)/) || [, 4096])[1], n = (k) => +((v.match(new RegExp(`${k}:\\s+(\\d+)`)) || [, 0])[1]); return Math.round(((n('Pages free') + n('Pages inactive')) * pg) / 1048576) }
+  if (process.platform === 'linux') { const m = fs.readFileSync('/proc/meminfo', 'utf8').match(/MemAvailable:\s+(\d+) kB/); if (m) return Math.round(+m[1] / 1024) }
+  return Math.round(os.freemem() / 1048576)
+}
+// Before an emulator starts: on Linux and Windows, refuse when less memory is available than it needs — a 2 GB
+// emulator (af-standard's config.ini: hw.ramSize=2G) started into a full machine drives it into swap until the desktop
+// freezes. macOS compresses memory instead: v4 ran the emulator at 1,839 MB free, so there it only reports.
+// ponytail: EMU_MB = the emulator's 2 GB + ~450 MB for adb and the build around it, unmeasured on Linux; raise it if a run freezes
+const EMU_MB = 2500
+function needMem(need, free = memFree(), mac = MAC) {
+  if (!(need > 0)) throw new Error('freemem --need <MB>')
+  if (!mac && free < need) throw new Error(`only ${free} MB of memory available, the emulator needs ${need} MB — start nothing. Stop only the plugin's own devices (app-factory-… simulators, af-… emulators) and check again; still short → file a critical finding with this line. Never free memory any other way (no sudo, drop_caches, swapoff, pkill or killall).`)
+  return String(free)
+}
 function stale(a) {
   const o = optOf(a), log = a[0]
   if (!log) throw new Error('stale <log> [--minutes N] [--device <id> --platform ios|android --app <id> --sdk <dir>]')
@@ -704,12 +720,21 @@ function stale(a) {
   if (res.state === 'stalled') res.next = 'stop this run: `app-restart`, then re-run only the file it was on, once; stalled again → `device-reset`, re-run once; stalled a third time → a major finding "hang" with this log, and go on with the next files'
   return JSON.stringify(res)
 }
-// processes whose command line mentions this device and flutter (the stuck `flutter test … -d <device>`)
+// A `flutter test … -d <device>` process (the flutter command, its dart flutter_tools, or flutter_tester): a word is exactly
+// the device id, and a word is the flutter tool itself — never a process that only mentions either (com.x.flutter_app).
+export const flutterFor = (args, dev) => {
+  const w = args.split(/\s+/).map((x) => x.replace(/^['"]+|['"]+$/g, ''))
+  return w.some((x) => x === dev || x === `--device-id=${dev}`) && w.some((x) => /(?:^|[\\/])(?:flutter(?:\.bat)?|flutter_tools\.snapshot|flutter_tester(?:\.exe)?)$/i.test(x))
+}
+// Stops those processes for this device — never this command itself or the shells and agent that started it.
 function killFlutterFor(dev) {
   const list = process.platform === 'win32'
-    ? run1('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'])
-    : run1('ps', ['-ax', '-o', 'pid=,command='])
-  const pids = list.split('\n').map((l) => l.trim().match(/^(\d+)\s+(.*)$/)).filter((m) => m && m[2].includes(dev) && /flutter/i.test(m[2]) && +m[1] !== process.pid).map((m) => +m[1])
+    ? run1('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }'])
+    : run1('ps', ['-A', '-o', 'pid=,ppid=,args=']) // -A: every process on macOS and Linux (macOS -e means environment)
+  const procs = list.split('\n').map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map((m) => ({ pid: +m[1], ppid: +m[2], args: m[3] }))
+  const mine = new Set()
+  for (let p = process.pid; p > 1 && !mine.has(p);) { mine.add(p); p = (procs.find((x) => x.pid === p) || {}).ppid }
+  const pids = procs.filter((x) => x.pid > 1 && !mine.has(x.pid) && flutterFor(x.args, dev)).map((x) => x.pid)
   for (const p of pids) { try { process.kill(p) } catch { /* already gone */ } }
   return pids
 }
@@ -740,6 +765,7 @@ function deviceReset(a) {
   if (app) run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'am', 'force-stop', app])
   run1(sdkTool(sdk, 'adb'), ['-s', dev, 'emu', 'kill'])
   for (let i = 0; i < 30 && run1(sdkTool(sdk, 'adb'), ['devices']).includes(dev); i++) sleepMs(1000)
+  needMem(EMU_MB) // left stopped when the machine is short of memory: the error says what to do
   // the emulator is the one process allowed to keep running (a window, like the Simulator app)
   spawn(sdkTool(sdk, 'emulator'), ['-avd', avd, '-wipe-data', '-no-snapshot-load', '-no-audio'], { detached: true, stdio: 'ignore' }).unref()
   run1(sdkTool(sdk, 'adb'), ['wait-for-device'], { timeout: 180000 })
@@ -810,12 +836,7 @@ function run([cmd, ...a]) {
   if (cmd === 'prd') return findPrd(path.dirname(dir()))
   // the machine: iOS (simulators, Xcode builds) only on macOS with Xcode's command-line tools
   if (cmd === 'host') return JSON.stringify({ os: process.platform, ios: MAC && !spawnSync('xcrun', ['--version'], { stdio: 'ignore' }).error })
-  // memory the test devices can use, in MB: macOS free + inactive pages (vm_stat), Linux MemAvailable, Windows free physical memory
-  if (cmd === 'freemem') {
-    if (MAC) { const v = run1('vm_stat', []), pg = +(v.match(/page size of (\d+)/) || [, 4096])[1], n = (k) => +((v.match(new RegExp(`${k}:\\s+(\\d+)`)) || [, 0])[1]); return String(Math.round(((n('Pages free') + n('Pages inactive')) * pg) / 1048576)) }
-    if (process.platform === 'linux') { const m = fs.readFileSync('/proc/meminfo', 'utf8').match(/MemAvailable:\s+(\d+) kB/); if (m) return String(Math.round(+m[1] / 1024)) }
-    return String(Math.round(os.freemem() / 1048576))
-  }
+  if (cmd === 'freemem') { const i = a.indexOf('--need'); return i >= 0 ? needMem(+a[i + 1]) : String(memFree()) }
   // free disk space in GB where the project is (df's flags differ between systems; Windows has none)
   if (cmd === 'freedisk') { const st = fs.statfsSync(path.resolve(a[0] || '.')); return String(Math.floor((st.bavail * st.bsize) / 1073741824)) }
   if (cmd === 'init') {
@@ -1437,6 +1458,15 @@ flutter:
   if (typeof path.matchesGlob === 'function') for (const g of pats) for (const f of files) assert.equal(globMatch(f, g), path.matchesGlob(f, g), `${f} ~ ${g}`)
   const host = JSON.parse(run(['host'])); assert.equal(host.os, process.platform); assert.equal(typeof host.ios, 'boolean')
   assert.ok(+run(['freemem']) > 0 && +run(['freedisk', os.tmpdir()]) >= 0)
+  assert.equal(needMem(2500, 1839, true), '1839', 'macOS only reports (v4: emulator ran at 1,839 MB free)')
+  assert.throws(() => needMem(2500, 1800, false), /only 1800 MB .* start nothing/)
+  assert.equal(needMem(2500, 6000, false), '6000')
+  assert.ok(+run(['freemem', '--need', '1']) > 0)
+  assert.ok(flutterFor('/Users/mach/Flutter Workspace/flutter/bin/cache/dart-sdk/bin/dart /Users/mach/Flutter Workspace/flutter/bin/cache/flutter_tools.snapshot test integration_test/a_test.dart -d emulator-5554 -r expanded', 'emulator-5554'))
+  assert.ok(flutterFor(`/bin/zsh -c eval 'set -o pipefail; "/home/u/flutter/bin/flutter" test integration_test/ -d emulator-5554 | tee /tmp/flow-emulator-5554.log'`, 'emulator-5554'))
+  assert.ok(!flutterFor('node /p/scripts/pipeline.mjs app-restart emulator-5554 --platform android --app com.example.flutter_app', 'emulator-5554'), 'mentions flutter only in the app id')
+  assert.ok(!flutterFor('/home/u/flutter/bin/flutter test -d emulator-55541', 'emulator-5554'), 'another emulator')
+  assert.ok(!flutterFor('tail -f /tmp/flow-emulator-5554.log', 'emulator-5554'))
   assert.deepEqual(JSON.parse(designDevice(375, 812, null, true)).configIni, { 'hw.lcd.width': 1125, 'hw.lcd.height': 2436, 'hw.lcd.density': 480 })
   return 'selftest ok'
 }

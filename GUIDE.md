@@ -254,6 +254,23 @@ macOS: alerter if installed (`brew install vjeantet/tap/alerter`; clicking it br
 
 It stays quiet while your own `~/.claude/settings.json` runs a notification hook (`attention.sh` or `notify.mjs`), because Claude Code runs plugin and settings hooks side by side and you would get each notification twice. On this Mac the old `attention.sh` entries were removed from `~/.claude/settings.json` on 2026-10-09, so the plugin's hook is the one that runs — in projects with the plugin only; other projects no longer get notifications. `scripts/attention.sh` is no longer used by anything.
 
+## 9f. Safety guard: no system-level commands
+
+The plugin's `PreToolUse` hook (`hooks/hooks.json` → `scripts/guard.mjs`) checks every Bash command in an app-factory project — the chat and every agent — before it runs, and refuses the ones that can freeze or crash the computer, or kill and delete what is yours:
+
+| Kind | Refused |
+|---|---|
+| Root | `sudo`, `doas`, `pkexec`, `su` |
+| Power | `reboot`, `shutdown`, `poweroff`, `halt`, `init 0/6`, `systemctl` (except `status`/`show`/`is-active`/`list-units`), `loginctl terminate…`, `launchctl reboot`, System Events restart |
+| Kernel memory | `drop_caches`, `sysrq`, any write into `/proc` or `/sys`, `sysctl -w`, `swapoff`, `swapon`, `mkswap`, `purge` |
+| Processes | `pkill`, `killall`, `xargs kill`, `kill` of -1, 0, 1, a process group or a computed list (`$(pgrep …)`) |
+| Disks | `rm -r` of `/`, `~` or `$HOME`, `--no-preserve-root`, `mkfs`, `fdisk`, `dd of=/dev/…`, `chmod/chown -R /`, a fork bomb |
+| Devices | `simctl delete/erase`, `simctl shutdown all`, `avdmanager delete` (only `pipeline.mjs cleanup` and `device-reset` may, and only the plugin's own) |
+
+What the agents do instead: free memory only by stopping the plugin's own devices (`app-factory-…` simulators, `af-…` emulators); a stuck app or device → `pipeline.mjs app-restart`, then `device-reset`, which stop only `flutter test` processes for that device (matched by its exact id and the flutter tool, never the agent's own shell). Before an emulator starts, `pipeline.mjs freemem --need 2500` fails on Linux and Windows when less memory is available (the emulator alone takes 2 GB: `hw.ramSize=2G`) — nothing is started and a critical finding is filed. On macOS it only reports, because macOS compresses memory (v4 ran the emulator at 1,839 MB free). Unit and widget tests run with `-j 4`: without it `flutter test` starts one test process per two CPU cores, and up to three agents test at once.
+
+Other projects and your own chats outside app-factory projects are not checked. `node scripts/guard.mjs selftest` tests it.
+
 ## 10. Why a simple app is big
 
 Measured on this Mac: a brand-new Flutter app's release APK for current phones (arm64) is **14.8 MB**. Of that, 11.1 MB is the Flutter engine and 2 MB the Flutter framework, which every Flutter app carries; the app's own code was 2 KB. Removing the default `cupertino_icons` package (an icon font the app did not use) saved about 114 KB. A **debug** build is far bigger (172 MB for the Invoice Maker pilot) because it carries the debugging compiler and code for three processor types — it is never the size users download. The optimisation in the final audit can only shrink what is not fixed: packages, assets and fonts, and the app's own code.

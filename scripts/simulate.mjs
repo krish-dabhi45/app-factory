@@ -6,7 +6,7 @@ const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
 
 const st = (b = 0, own = { logic: 0, ui: 0, shared: 0, unrouted: 0 }) => ({ blocking: b, blockingByOwner: own })
 async function sim(name, args, over = {}) {
-  const calls = [], logs = [], prompts = {}
+  const calls = [], logs = [], prompts = {}, running = new Set(), along = {} // along[label]: the agents already running when it started
   let inParallel = 0, maxPar = 0
   const def = (label) => {
     if (label === 'design import') return { status: 'none', prdScreens: 0, screens: 0, matchedScreens: 0, flows: 0, colors: 0, assets: 0, missing: 0, figmaCalls: 0, compression: '', note: '' }
@@ -27,17 +27,17 @@ async function sim(name, args, over = {}) {
   }
   const agent = async (prompt, opts = {}) => {
     const label = opts.label || '?'
-    calls.push(label); prompts[label] = prompt
+    calls.push(label); prompts[label] = prompt; along[label] = [...running]; running.add(label)
     inParallel++; maxPar = Math.max(maxPar, inParallel)
     await new Promise((r) => setTimeout(r, 1))
-    inParallel--
+    inParallel--; running.delete(label)
     const o = over[label]
     return typeof o === 'function' ? o(calls.filter((c) => c === label).length) : o !== undefined ? o : def(label)
   }
   const parallel = async (fns) => Promise.all(fns.map((f) => f()))
   const fn = new AsyncFunction('args', 'agent', 'parallel', 'phase', 'log', src)
   const res = await fn(args, agent, parallel, () => {}, (l) => logs.push(l))
-  return { name, calls, logs, res, maxPar, prompts }
+  return { name, calls, logs, res, maxPar, prompts, along }
 }
 const show = (x) => console.log(`\n## ${x.name}\n${x.calls.join(' | ')}\n→ done=${x.res.done} gateRounds=${x.res.gateRounds} testRounds=${x.res.testRounds} seniorQa=${x.res.seniorQa} maxParallel=${x.maxPar}${x.res.questions ? ` questions=${x.res.questions.length}` : ''}`)
 const bad = (x) => Object.entries(x.prompts).filter(([, p]) => /undefined|\[object Object\]|NaN|\$\{/.test(p)).map(([l]) => l)
@@ -85,7 +85,7 @@ for (const os of ['linux', 'win32']) {
   check(!/xcrun|simctl|vm_stat|cp -Rc|df -g|swift "|open -a Simulator|flutter build ios|iphonesimulator/.test(all), `${os}: no iOS or macOS-only command in any agent prompt (found: ${(all.match(/xcrun|simctl|vm_stat|cp -Rc|df -g|swift "|open -a Simulator|flutter build ios|iphonesimulator/g) || []).slice(0, 5).join(', ') || 'none'})`)
   check(!x.calls.some((c) => /iOS runner|senior QA (setup|\d)/.test(c)) && x.calls.includes('test r1 Android runner') && x.calls.includes('senior QA Android'), `${os}: no iOS runner or iOS tester; the Android runner and the Android senior QA run`)
   check(/no iOS runner \(this computer has no iOS simulator\)/.test(x.prompts['test setup r1']) && /"[^"]*" pub get/.test(x.prompts['test setup r1']) && /cp -R "/.test(x.prompts['test setup r1']), `${os}: round setup makes only the Android snapshot, with pub get and a plain cp -R`)
-  check(/Fresh install: `[^`]*uninstall <applicationId>/.test(x.prompts.explore) && /all five scenarios of section 8/.test(x.prompts['senior QA Android']), `${os}: explore installs the APK on the emulator; Android senior QA runs every scenario`)
+  check(/Fresh install: `[^`]*uninstall <applicationId>/.test(x.prompts.explore) && /all ten scenarios of section 8/.test(x.prompts['senior QA Android']) && /read_screen/.test(x.prompts['senior QA Android']) && /read_screen/.test(x.prompts.explore) && /wait-app/.test(x.prompts.explore), `${os}: explore installs the APK on the emulator; Android senior QA runs every scenario`)
   check(/flutter build apk --debug [^`]*` \(no iOS build: this computer is not a Mac/.test(x.prompts['integrate + gate']) && /an Android emulator of the frame's size/.test(x.prompts['final audit + fix'] || x.prompts['final audit + fix + optimise'] || '') && /pipeline\.mjs" freemem/.test(x.prompts.devices), `${os}: the gate builds the APK only; the design check uses an Android emulator; memory from freemem`)
   check(os === 'win32' ? /avdmanager\.bat"/.test(x.prompts.devices) : /avdmanager" create avd/.test(x.prompts.devices), `${os}: avdmanager is called by its real file name`)
   check(x.res.iosHost === false && x.logs.some((l) => /iOS: not built or tested/.test(l)), `${os}: the result and the log say iOS was not built or tested`)
@@ -184,3 +184,32 @@ check(bad(x).length === 0, `swiftui prompts clean${bad(x).length ? ': ' + bad(x)
 
 x = await sim('parallel:false (flutter)', { stage: 'build', parallel: false })
 show(x); check(!x.calls.includes('interface') && x.calls.includes('build: items') && x.calls.includes('gate'), 'one builder per group, then the gate')
+
+// ── Real phones: whichever is connected runs its platform's device tests beside the simulators ──
+const PHONES = { ios: { standard: 'S1', small: 'S2', large: 'S3' }, android: { standard: 'af-standard' }, androidInScope: true, freeMemoryMB: 4000, phones: { android: 'ZD1', androidModel: 'moto_e22s', ios: 'IP1', iosName: 'iPhone 11' } }
+x = await sim('an iPhone and an Android phone connected', { stage: 'build' }, { devices: PHONES, 'test setup r1': { base: 'B', bundleId: 'x', shards: [['integration_test/a_test.dart'], ['integration_test/b_test.dart']], name: '', runTests: true } })
+show(x)
+check(/devices real/.test(x.prompts.devices) && /phone save <that serial>/.test(x.prompts.devices), 'the devices step finds the connected phones and saves the Android phone\'s settings')
+check(x.logs.some((l) => /iOS runners: the iPhone iPhone 11 \+ 1 simulator\(s\).*5400 MB kept for the phone build/.test(l)), 'memory: the simulators leave room for both phone builds (4000 MB free → 1 simulator)')
+check(x.calls.includes('test r1 iOS runner 1 (iPhone)') && x.calls.includes('test r1 iOS runner 2') && x.calls.includes('test r1 Android runner (phone)') && !x.calls.includes('test r1 Android runner'), 'round 1: the iPhone, one simulator and the Android phone — no emulator')
+check(['test r1 iOS runner 1 (iPhone)', 'test r1 iOS runner 2'].every((l) => x.along['test r1 Android runner (phone)'].includes(l)), 'the Android phone runs AT THE SAME TIME as the iPhone and the simulator')
+check(/-d IP1 /.test(x.prompts['test r1 iOS runner 1 (iPhone)']) && /real iPhone iPhone 11 \(udid IP1\)/.test(x.prompts['test r1 iOS runner 1 (iPhone)']) && /-d S1 /.test(x.prompts['test r1 iOS runner 2']), 'each iOS runner on its own device; the iPhone is never booted or reset')
+check(/-d ZD1 /.test(x.prompts['test r1 Android runner (phone)']) && /never start, stop, reset or wipe it/.test(x.prompts['test r1 Android runner (phone)']) && /gradlew --stop/.test(x.prompts['test r1 Android runner (phone)']), 'the Android phone runner: its serial, hands off the phone, Gradle stopped after')
+check(/qa-r1-android/.test(x.prompts['merge r1']) && x.calls.filter((c) => c === 'merge r1').length === 1 && /3b\. The Android runner's snapshot/.test(x.prompts['test setup r1']), 'one merge of the iOS and Android branches; the Android worktree made in setup')
+check(x.calls.includes('senior QA Android (phone)') && x.along['senior QA Android (phone)'].includes('senior QA 1') && /build apk --debug/.test(x.prompts['senior QA setup']) && /gradlew --stop/.test(x.prompts['senior QA setup']), 'senior QA on the Android phone at the same time as the iOS testers, on an APK built once')
+check(x.res.done === true && bad(x).length === 0, `done, prompts clean${bad(x).length ? ': ' + bad(x).join(', ') : ''}`)
+
+x = await sim('both phones unusable (locked) → simulator and emulator take over', { stage: 'build' }, { devices: PHONES,
+  'test setup r1': { base: 'B', bundleId: 'x', shards: [['integration_test/a_test.dart'], ['integration_test/b_test.dart']], name: '', runTests: true },
+  'test r1 iOS runner 1 (iPhone)': { testsRun: 0, passed: 0, failed: 0, testsFixed: [], filed: [], blocked: [], resolved: [], ...st() },
+  'test r1 Android runner (phone)': { testsRun: 0, passed: 0, failed: 0, testsFixed: [], filed: [], blocked: [], resolved: [], ...st() },
+  'senior QA Android (phone)': { scenarios: [], filed: [], ...st() } })
+show(x)
+check(x.calls.includes('test r1 iOS runner 1 (iPhone fallback)') && /-d S1 /.test(x.prompts['test r1 iOS runner 1 (iPhone fallback)']) && /integration_test\/a_test\.dart/.test(x.prompts['test r1 iOS runner 1 (iPhone fallback)']), "the iPhone's share runs on the iPhone 17 simulator")
+check(x.calls.includes('test r1 Android runner') && /Android emulator af-standard/.test(x.prompts['test r1 Android runner']) && x.calls.indexOf('test r1 Android runner') > x.calls.indexOf('merge r1'), 'the emulator runs the Android tests after the iOS merge')
+check(x.calls.includes('senior QA Android') && x.calls.indexOf('senior QA Android') > x.calls.indexOf('senior QA Android (phone)'), 'the Android senior QA moves to the emulator')
+check(x.res.done === true && bad(x).length === 0, 'done, prompts clean')
+
+x = await sim('no phone connected: as before', { stage: 'build' })
+check(!x.calls.some((c) => /\((iPhone|phone)\)/.test(c)) && x.calls.includes('test r1 Android runner') && !x.along['test r1 Android runner'].some((l) => /iOS runner/.test(l)), 'without phones: simulators, then the emulator after them — unchanged')
+

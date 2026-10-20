@@ -150,15 +150,15 @@ Every acceptance criterion in CONTRACT.md has at least one test named after it (
 
 - **T1. Unit tests** (`test/domain/`, `test/data/`) cover every use case and repository. Use hand-written fakes for services.
 - **T2. Widget tests** (`test/ui/`) cover what a screen shows and how it reacts. Wrap the widget in `MaterialApp`; after `tap` call `pump()`, or `pumpAndSettle()` when a route or animation follows; use `enterText` for input and `scrollUntilVisible` before touching off-screen rows.
-- **T3. Every screen fits every screen size — a layout test per screen, per size** (U8, U15; `expectFitsScreen` also fails when two tap targets in `tappable` partly overlap — U15.9). The interface step copies the plugin's `templates/flutter/test/ui/fits_screen.dart` to `test/ui/fits_screen.dart` — never retyped or edited (verified with Flutter 3.38.5: it passes a U15 screen on every size, at text ×3 and with the keyboard open, and fails a frame copied with absolute positions, a button under the home indicator, text in a frame-sized box, and an ellipsis). Each screen's test pumps the screen in the state the design shows, on every `screenCases` size plus the design frame's own size (and a tablet and landscape only when CONTRACT.md has them), and calls `expectFitsScreen` with the screen's tappable `AppKeys`:
+- **T3. Every screen fits every screen size — a layout test per screen, per size** (U8, U15; `expectFitsScreen` also fails when two tap targets in `tappable` that one Row, Column, Stack or Wrap lays out partly overlap — U15.9). The interface step copies the plugin's `templates/flutter/test/ui/fits_screen.dart` to `test/ui/fits_screen.dart` — never retyped or edited (verified with Flutter 3.47.7: it passes a correct form on every size and with the keyboard open, a FAB floating over a list, a Save button the open keyboard covers, a long text on a hidden tab and a bottom button padded by the system inset — each of which the previous helper failed — and fails two buttons a Stack draws over each other, a button under the home indicator and an ellipsis). Every failure starts with `<case> text ×<scale>:`. Each screen's test pumps the screen in the state the design shows, on every `screenCases` size plus the design frame's own size (and a tablet and landscape only when CONTRACT.md has them), and calls `expectFitsScreen` with the screen's tappable `AppKeys`:
   - **at normal text size, with `fullText`:** no overflow; every keyed element can be scrolled into view and is then fully inside the screen; every tappable one is inside the safe area; no text is cut off (by `maxLines`, an ellipsis, a box too small for it, or a line too long) except a text the design itself shows truncated, listed in `mayTruncate` with the reason in a comment;
-  - **at the largest text (`textScale: 3`), `fullText: false`:** no overflow, and everything still reachable and inside the screen;
-  - **a screen with text fields, on the iPhone SE with `keyboard: 260`:** every field can be scrolled above the keyboard (`tappable` = the fields);
+  - **at the largest text of that case (`textScales(c).last`: ×3 on the iPhone cases, ×2 on the Android ones — Android's largest font size is 200%), `fullText: false`:** no overflow, and everything still reachable and inside the screen;
+  - **a screen with text fields, on the iPhone SE with `keyboard: 260`:** every field can be scrolled above the keyboard — only the fields in `tappable` are checked then (a button the keyboard covers is where it should be);
   - in each language and in dark mode the contract has. Overflow and cut-off text are found without a simulator; the device runs (T4) then confirm the real insets and fonts.
   ```dart
-  // test/ui/fits_screen.dart (copied from the plugin) gives: ScreenCase(name, size, top, bottom); screenCases (320×568,
-  // iPhone SE 375×667, iPhone 17 Pro 402×874, Android 411×914, iPhone 17 Pro Max 440×956); pumpScreen(tester, case, app,
-  // {textScale, keyboard}); expectFitsScreen(tester, case, {tappable, fullText, mayTruncate}).
+  // test/ui/fits_screen.dart (copied from the plugin) gives: ScreenCase(name, size, top, bottom, {android}); screenCases
+  // (320×568, iPhone SE 375×667, iPhone 17 Pro 402×874, Android 411×914, iPhone 17 Pro Max 440×956); textScales(case);
+  // pumpScreen(tester, case, app, {textScale, keyboard}); expectFitsScreen(tester, case, {tappable, fullText, mayTruncate}).
 
   // test/ui/item_form_layout_test.dart
   void main() {
@@ -168,7 +168,7 @@ Every acceptance criterion in CONTRACT.md has at least one test named after it (
         await expectFitsScreen(t, c, tappable: [AppKeys.itemName, AppKeys.itemPrice, AppKeys.save]);
       });
       testWidgets('T3 item form at the largest text ${c.name}', (t) async {
-        await pumpScreen(t, c, const MaterialApp(home: ItemFormView(/* fakes */)), textScale: 3);
+        await pumpScreen(t, c, const MaterialApp(home: ItemFormView(/* fakes */)), textScale: textScales(c).last);
         await expectFitsScreen(t, c, tappable: [AppKeys.save], fullText: false);
       });
     }

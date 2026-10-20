@@ -31,6 +31,17 @@
 //                         — the second fix, only for the plugin's own devices (app-factory-*, af-*): shut down (frees its
 //                           memory), wipe its data (simctl erase / emulator -wipe-data), boot again; prints the device
 //   layout-lint [--root <dir>] — lib/ui/ sizes that cannot fit every phone (build skill U15), unless marked // layout-ok: <why>
+//   wait-app <udid|serial> --platform ios|android --app <id> [--max <seconds>] [--sdk <dir>]
+//                         — instead of a fixed pause after launching or reopening the app: returns as soon as it is up
+//                           (Android: process running and its window focused, a system dialog over it answered; iOS: process
+//                           running and the screen still for 1 s, or 5 s after it started)
+//   probe <udid|serial> --platform ios|android [--app <id>] [--sdk <dir>]
+//                         — a by-hand stuck check: device up, app running, a hash of the screen; answers Android's own
+//                           "isn't responding" / "has stopped" dialog by its button (Wait — never Close app) and says whose it was
+//   settle <serial> [--sdk <dir>] — waits (≤ 180 s) until a just-booted emulator's CPU is at most 50% busy twice in a row
+//   scenario done <ios-se|ios-17|ios-pro-max|android> <n> <summary...> | scenario list <device>
+//                         — senior QA records each scenario as it finishes; a restarted tester skips the ones done
+//   maestro-install       — the plugin's own Maestro 2.11.0 (~/.app-factory/maestro-2.11.0, SHA-256 checked) for android-screen.mjs
 //   design-check              — fails unless every referenced screen was compared, every one of its components checked and
 //                               present (or excluded by the contract), and no DESIGN finding is open
 //   decisions [--questions <json file>] [--answers <json file>] [--root <dir>]
@@ -41,6 +52,10 @@
 //   timing start <stage> | timing pause <reason> | timing end [note] | timing
 //                         — the run's timeline: started, paused for the user's questions, resumed, interrupted, ended; per-phase spans
 //   devices claim <project> | devices release <project> | devices status
+//   devices real [--sdk <dir>] — the real phones connected now (adb: not an emulator, state "device"; iOS: devicectl
+//                           tunnelState "connected"): {"android":[{serial,model}],"ios":[{udid,name,type,developerMode}]}
+//   phone save|restore <serial> — a real Android phone's own settings (font scale, dark mode, Wi-Fi, mobile data,
+//                           rotation), saved before the run changes any and put back at `devices release` and `stop`
 //                         — one machine-wide lock on the shared test devices (simulators and emulators), so only one project's run uses them at a time
 //   colors [--root <dir>] — fails if lib/ uses a colour that is not in design/colors.json (the imported Figma palette)
 //   deps [--root <dir>]   — Flutter: every package in pubspec.yaml and the files that use it; fails if one is unused
@@ -67,6 +82,7 @@ import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import { secret, findPrd } from './secrets.mjs'
 import { find as findTools } from './configure.mjs'
+import { MAESTRO_VERSION, maestroDir } from './android-screen.mjs'
 
 const dir = () => path.resolve(process.env.PIPELINE_DIR || '.pipeline')
 const file = () => path.join(dir(), 'state.json')
@@ -159,11 +175,78 @@ const OWNERS = ['logic', 'ui', 'shared']
 // The test devices (simulators, emulators) are shared by every project on this Mac, so they are locked machine-wide.
 // ponytail: no expiry — a run that dies keeps the lock; `devices status` names the holder, and deleting the file frees it.
 const deviceLock = () => path.join(process.env.APP_FACTORY_HOME || path.join(os.homedir(), '.app-factory'), 'devices.lock')
-function devices([sub, project]) {
+// ── Real phones: a connected one runs the device tests beside the simulators ──────────────────────────────────
+// Ported from app-auditor-and-tester v0.23 (Moto e22s, Android 12). `adb devices -l` lines after its header: serial,
+// state, then key:value fields (model, device, product, transport_id…)
+export const parseAdbDevices = (text) => text.split('\n').map((l) => l.trim()).filter((l) => l && l !== 'List of devices attached').map((l) => {
+  const [serial, state, ...rest] = l.split(/\s+/)
+  const fields = Object.fromEntries(rest.filter((x) => x.includes(':')).map((x) => { const i = x.indexOf(':'); return [x.slice(0, i), x.slice(i + 1)] }))
+  return { serial, state, model: fields.model || '' }
+})
+// a real, connected Android phone or tablet: state "device" (not unauthorized/offline), never an emulator-NNNN serial
+export const realAndroidDevices = (text) => parseAdbDevices(text).filter((d) => d.state === 'device' && !/^emulator-\d+$/.test(d.serial))
+// devicectl lists every iPhone/iPad ever paired; connectionProperties.tunnelState is "connected" only for one reachable
+// now ("unavailable" for a paired one not plugged in — seen 2026-10-20 on this Mac's iPhone XR, iPhone 11 and iPad 9).
+// udid = hardwareProperties.udid, the id `flutter test -d` takes; type iPhone or iPad; developer mode must be enabled.
+export const realIosDevices = (json) => (json.result?.devices || []).filter((d) => d.connectionProperties?.tunnelState === 'connected')
+  .map((d) => ({ udid: d.hardwareProperties?.udid || '', name: d.deviceProperties?.name || '', type: d.hardwareProperties?.deviceType || '', developerMode: d.deviceProperties?.developerModeStatus || '' }))
+// devicectl's JSON goes to a temp file: `--json-output -` still prints the table (devicectl 477.39, Xcode 26.1.1)
+function devicesReal(a) {
+  const sdk = optOf(a)('--sdk') || findTools().androidSdk
+  const android = sdk && fs.existsSync(sdkTool(sdk, 'adb')) ? realAndroidDevices(run1(sdkTool(sdk, 'adb'), ['devices', '-l'], { timeout: 15000 })) : []
+  return JSON.stringify({ android, ios: MAC ? connectedIos() : [] })
+}
+// A real phone is the user's own: the settings a run changes on it (text size, dark mode, Wi-Fi, mobile data, rotation)
+// are saved once before the first change and put back when the run releases its devices or is stopped. A file left by a
+// run that died first keeps the values from before it: a later save never overwrites it.
+const phoneFile = (serial) => path.join(path.dirname(deviceLock()), `phone-${serial.replace(/[^\w.-]/g, '_')}.json`)
+// saved values → the adb commands that put them back (Wi-Fi last: over Wi-Fi debugging, turning it off cuts adb)
+export const phoneRestoreCmds = (v) => [
+  /^\d+(\.\d+)?$/.test(v.fontScale || '') ? ['shell', 'settings', 'put', 'system', 'font_scale', v.fontScale] : ['shell', 'settings', 'delete', 'system', 'font_scale'],
+  ...(/^(yes|no|auto)$/.test(v.night || '') ? [['shell', 'cmd', 'uimode', 'night', v.night]] : []),
+  ...(/^[01]$/.test(v.accel || '') ? [['shell', 'settings', 'put', 'system', 'accelerometer_rotation', v.accel]] : []),
+  ...(/^[0-3]$/.test(v.rotation || '') ? [['shell', 'settings', 'put', 'system', 'user_rotation', v.rotation]] : []),
+  ...(/^\d$/.test(v.data || '') ? [['shell', 'svc', 'data', v.data === '0' ? 'disable' : 'enable']] : []),
+  ...(/^\d$/.test(v.wifi || '') ? [['shell', 'svc', 'wifi', v.wifi === '0' ? 'disable' : 'enable']] : []),
+]
+const phoneUp = (adb, serial) => run1(adb, ['-s', serial, 'get-state'], { timeout: 15000 }).trim() === 'device'
+function restorePhone(adb, serial) {
+  const f = phoneFile(serial)
+  if (!fs.existsSync(f)) return `${serial}: no saved settings`
+  if (!phoneUp(adb, serial)) return `${serial} is not connected — its settings stay saved in ${f} and are put back the next time devices are released with it connected`
+  const v = JSON.parse(fs.readFileSync(f, 'utf8'))
+  for (const c of phoneRestoreCmds(v)) run1(adb, ['-s', serial, ...c], { timeout: 15000 })
+  fs.rmSync(f, { force: true })
+  return `${serial}: settings put back (font_scale ${v.fontScale}, night ${v.night || '?'}, Wi-Fi ${v.wifi}, mobile data ${v.data}, auto-rotate ${v.accel}, rotation ${v.rotation})`
+}
+// every phone with saved settings: at `devices release` and at `stop`
+function restorePhones(sdk) {
+  if (!sdk || process.env.APP_FACTORY_NO_DEVICES === '1') return []
+  let files = []
+  try { files = fs.readdirSync(path.dirname(deviceLock())).filter((n) => /^phone-.+\.json$/.test(n)) } catch { return [] }
+  return files.map((n) => { try { return restorePhone(sdkTool(sdk, 'adb'), JSON.parse(fs.readFileSync(path.join(path.dirname(deviceLock()), n), 'utf8')).serial) } catch (e) { return `${n}: not restored (${e.message})` } })
+}
+function phoneCmd(a) {
+  const [sub, serial] = a, sdk = optOf(a)('--sdk') || findTools().androidSdk
+  if (!['save', 'restore'].includes(sub) || !serial || serial.startsWith('--')) throw new Error('phone save|restore <serial> [--sdk <dir>]')
+  if (/^emulator-\d+$/.test(serial)) throw new Error(`${serial} is an emulator — phone save/restore is for a real phone only`)
+  if (!sdk) throw new Error('no Android SDK found — pass --sdk')
+  const adb = sdkTool(sdk, 'adb'), f = phoneFile(serial)
+  if (sub === 'restore') return restorePhone(adb, serial)
+  if (fs.existsSync(f)) return `${serial}: kept the settings saved before an earlier run that did not put them back — they are put back at release`
+  if (!phoneUp(adb, serial)) throw new Error(`${serial} is not connected (adb get-state is not "device") — test on the emulator instead`)
+  const sh = (...x) => run1(adb, ['-s', serial, 'shell', ...x], { timeout: 15000 }).trim()
+  const v = { serial, fontScale: sh('settings', 'get', 'system', 'font_scale'), night: (sh('cmd', 'uimode', 'night').match(/:\s*(\w+)/) || [])[1] || '',
+    wifi: sh('settings', 'get', 'global', 'wifi_on'), data: sh('settings', 'get', 'global', 'mobile_data'), accel: sh('settings', 'get', 'system', 'accelerometer_rotation'), rotation: sh('settings', 'get', 'system', 'user_rotation') }
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(v))
+  return `${serial}: settings saved before the run changes any (${JSON.stringify(v)}) — put back at release or stop`
+}
+function devices([sub, project, ...rest]) {
   const f = deviceLock()
   const holder = () => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null)
+  if (sub === 'real') return devicesReal([project, ...rest].filter(Boolean))
   if (sub === 'status') { const h = holder(); return h ? `in use by ${h.project} since ${h.since}` : 'free' }
-  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status')
+  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status | devices real [--sdk <dir>]')
   const me = path.resolve(project)
   if (sub === 'claim') {
     fs.mkdirSync(path.dirname(f), { recursive: true })
@@ -179,7 +262,7 @@ function devices([sub, project]) {
   const h = holder()
   if (h && h.project !== me) throw new Error(`devices are held by ${h.project}, not ${me} — not released`)
   fs.rmSync(f, { force: true })
-  return `devices released by ${me}`
+  return [`devices released by ${me}`, ...restorePhones(findTools().androidSdk)].join('\n')
 }
 
 const shell = (c, env = {}) => { try { return execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...env } }) } catch { return '' } }
@@ -225,7 +308,7 @@ function stopRun(a) {
   const f = deviceLock(), h = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null
   const heldDevices = Boolean(h && path.resolve(h.project) === project)
   const lines = []
-  if (heldDevices) { lines.push(...stopDevices(opt('--sdk') || findTools().androidSdk)); fs.rmSync(f, { force: true }); lines.push('device lock released') }
+  if (heldDevices) { lines.push(...stopDevices(opt('--sdk') || findTools().androidSdk), ...restorePhones(opt('--sdk') || findTools().androidSdk)); fs.rmSync(f, { force: true }); lines.push('device lock released') }
   else lines.push(h ? `devices left alone — they are held by ${h.project}` : 'devices were not held by this run')
   const last = (s.timing || []).at(-1)
   if (last && !['end', 'stop'].includes(last.event)) { s.timing.push({ event: 'stop', at: now(), note: 'by the user' }); lines.push('timing: stopped') }
@@ -450,13 +533,15 @@ function deps(root) {
 
 // Every colour written in lib/ must come from the imported design (design/colors.json, written by the design import).
 // Catches Color(0xAARRGGBB), Color.fromARGB, Color.fromRGBO and Material's named Colors.* (except transparent).
+// lib/google_ads_material/ is the installed ads template (flutter-ads skill section 7): its loader and shimmer colours are
+// its own, native-ad colours come from Remote Config — not checked.
 function colors(root) {
   const pal = path.join(root, 'design', 'colors.json')
   if (!fs.existsSync(pal)) return 'no design/colors.json (no imported design) — nothing to check'
   const allowed = new Set(JSON.parse(fs.readFileSync(pal, 'utf8')).colors.map((c) => c.hex.toUpperCase().replace(/^#/, '').slice(-6)))
   const hex2 = (n) => Math.round(Number(n)).toString(16).padStart(2, '0').toUpperCase()
   const bad = []
-  for (const f of walk(root).filter((f) => f.startsWith('lib/') && f.endsWith('.dart'))) {
+  for (const f of walk(root).filter((f) => f.startsWith('lib/') && !f.startsWith('lib/google_ads_material/') && f.endsWith('.dart'))) {
     fs.readFileSync(path.join(root, f), 'utf8').split('\n').forEach((line, i) => {
       const at = `${f}:${i + 1}`
       for (const m of line.matchAll(/Color\(\s*0x([0-9A-Fa-f]{8})\s*\)/g)) if (!allowed.has(m[1].slice(2).toUpperCase())) bad.push(`${at} #${m[1].slice(2).toUpperCase()}`)
@@ -673,15 +758,152 @@ function locked(fn) {
 const STALL_MIN = 10 // ponytail: longer than any single flow test seen in v4 (Android files of 1–3 tests: ~6 min each); raise per app if needed
 const DONE = /All tests passed!|Some tests failed\.|No tests ran|No tests were found|^exit=\d+/m
 const optOf = (a) => (k) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : null }
+// An iOS id that is not a simulator here is a real iPhone/iPad: up = devicectl's tunnel is connected; whether the app runs
+// is not known (simctl cannot see a phone), so `stale` judges a phone's test run by its log alone
+const iosSim = (dev) => run1('xcrun', ['simctl', 'list', 'devices']).includes(dev)
+function connectedIos() {
+  const tmp = path.join(os.tmpdir(), `devicectl-${process.pid}.json`)
+  run1('xcrun', ['devicectl', 'list', 'devices', '--json-output', tmp], { timeout: 30000 })
+  try { return realIosDevices(JSON.parse(fs.readFileSync(tmp, 'utf8'))) } catch { return [] } finally { fs.rmSync(tmp, { force: true }) }
+}
 function appAlive(platform, dev, app, sdk) {
   if (!app || !dev) return null
-  if (platform === 'ios') return MAC ? run1('xcrun', ['simctl', 'spawn', dev, 'launchctl', 'list']).includes(`UIKitApplication:${app}`) : null
+  if (platform === 'ios') return MAC && iosSim(dev) ? run1('xcrun', ['simctl', 'spawn', dev, 'launchctl', 'list']).includes(`UIKitApplication:${app}`) : null
   return sdk ? run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'pidof', app]).trim().length > 0 : null
 }
 function deviceUp(platform, dev, sdk) {
   if (!dev) return null
-  if (platform === 'ios') return MAC ? run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(dev) : null
+  if (platform === 'ios') return !MAC ? null : iosSim(dev) ? run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(dev) : connectedIos().some((d) => d.udid === dev)
   return sdk ? run1(sdkTool(sdk, 'adb'), ['-s', dev, 'get-state']).trim() === 'device' : null
+}
+// ── By-hand device steps: wait for the app, check for a stuck screen, answer Android's own dialogs ──────────────────
+// Ported from app-auditor-and-tester (v0.16–v0.23.4), where each was measured: wait-app returned in 4.4 s where agents
+// waited a fixed 22 s; fixed pauses cost one audit 27 min (368 of them); an emulator used right after boot showed 3–5
+// "isn't responding" dialogs (Google Play services, Digital Wellbeing) and none once settled.
+// Android's "isn't responding" / "has stopped" dialog (dumpsys window: mCurrentFocus=Window{… Application Not Responding: <process>}).
+export function systemDialog(dumpsysWindow) {
+  const m = String(dumpsysWindow).match(/mCurrentFocus=Window\{\S+ \S+ (Application Not Responding|Application Error): ([^\s}]+)\}/)
+  return m ? { kind: m[1] === 'Application Error' ? 'stopped' : 'not responding', process: m[2] } : null
+}
+// the centre of the view with this resource id in a uiautomator dump (bounds="[x1,y1][x2,y2]")
+export function buttonCenter(xml, id) {
+  const m = String(xml).match(new RegExp(`resource-id="${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*?bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`))
+  return m ? [Math.round((+m[1] + +m[3]) / 2), Math.round((+m[2] + +m[4]) / 2)] : null
+}
+export const whose = (proc, app) => (app && (proc === app || proc.startsWith(`${app}:`)) ? 'app' : 'other')
+// Answered by this script, never by an agent's tap: "Wait" for not responding ("Close app" would kill the app and look
+// like a crash), "Close app" for has stopped. Its ActivityManager / AndroidRuntime log lines are kept as evidence.
+function answerDialog(adb, dev, app) {
+  const focus = () => systemDialog(run1(adb, ['-s', dev, 'shell', 'dumpsys', 'window'], { timeout: 30000 }))
+  const d = focus()
+  if (!d) return null
+  const log = run1(adb, ['-s', dev, 'logcat', '-d', '-t', '3000', 'ActivityManager:E', 'AndroidRuntime:E', '*:S'], { timeout: 30000 }).split('\n').map((l) => l.trim())
+    .filter((l) => /ANR in |Reason: |FATAL EXCEPTION|Process: /.test(l)).slice(-6)
+  const button = d.kind === 'not responding' ? ['android:id/aerr_wait', 'Wait'] : ['android:id/aerr_close', 'Close app']
+  // uiautomator dump is killed while Maestro's driver (android-screen.mjs) holds Android's one UiAutomation connection:
+  // stop it first — read_screen starts it again on its next call
+  run1(adb, ['-s', dev, 'shell', 'am', 'force-stop', 'dev.mobile.maestro'], { timeout: 15000 })
+  const xy = buttonCenter(run1(adb, ['-s', dev, 'shell', 'uiautomator dump /sdcard/af-dialog.xml >/dev/null 2>&1; cat /sdcard/af-dialog.xml'], { timeout: 30000 }), button[0])
+  if (xy) run1(adb, ['-s', dev, 'shell', 'input', 'tap', String(xy[0]), String(xy[1])], { timeout: 15000 })
+  let cleared = false
+  for (let i = 0; i < 15 && !cleared; i++) { sleepMs(1000); cleared = !focus() }
+  return { ...d, whose: whose(d.process, app), answered: xy ? button[1] : null, cleared, log }
+}
+const dialogNext = (d, dev) => !d.cleared ? `the dialog could not be answered (${d.answered ? 'it stayed after the tap' : 'its button was not found'}) — \`app-restart\`, then \`device-reset\` if it is still there; never a finding by itself`
+  : d.whose === 'other' ? `${d.process} — not the app — ${d.kind === 'stopped' ? 'stopped; its dialog was closed' : 'was not answering; answered Wait'}. Never a finding about the app: probe again and redo your step`
+  : d.kind === 'stopped' ? 'the app has stopped (a crash): a critical finding with your steps and these log lines; relaunch it and go on'
+  : `the app did not answer input within 5 s (answered Wait, the app goes on). Not a finding yet — the emulator may have been starved: \`settle ${dev}\`, then redo the step once; "not responding" again → a major finding "hang: not responding in <step>" with these log lines`
+// what the screen shows now, as a short hash (null when no screenshot could be taken — a frozen device times out)
+function screenHash(platform, dev, sdk) {
+  const tmp = path.join(os.tmpdir(), `screen-${process.pid}.png`)
+  if (platform === 'ios') run1('xcrun', ['simctl', 'io', dev, 'screenshot', tmp])
+  else { try { fs.writeFileSync(tmp, execFileSync(sdkTool(sdk, 'adb'), ['-s', dev, 'exec-out', 'screencap', '-p'], { maxBuffer: 64e6, stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 })) } catch { /* none */ } }
+  if (!fs.existsSync(tmp)) return null
+  const h = crypto.createHash('sha1').update(fs.readFileSync(tmp)).digest('hex').slice(0, 12); fs.rmSync(tmp); return h
+}
+// the app's own window has the focus (dumpsys window: mCurrentFocus=Window{… u0 <app>/<activity>})
+export const appFocused = (dumpsysWindow, app) => { const m = String(dumpsysWindow).match(/mCurrentFocus=Window\{\S+ \S+ ([^}\s]+)\}/); return Boolean(m && app && m[1].startsWith(`${app}/`)) }
+function waitApp(a) {
+  const o = optOf(a), dev = a[0], platform = o('--platform'), app = o('--app'), sdk = o('--sdk') || findTools().androidSdk, max = Number(o('--max') || 60)
+  if (!dev || !['ios', 'android'].includes(platform) || !app || !(max > 0)) throw new Error('wait-app <udid|serial> --platform ios|android --app <id> [--max <seconds>]')
+  const t0 = Date.now(), secs = () => Math.round((Date.now() - t0) / 100) / 10, dialogs = [], adb = sdk ? sdkTool(sdk, 'adb') : null
+  let aliveAt = null, last = null
+  while (Date.now() - t0 < max * 1000) {
+    if (appAlive(platform, dev, app, sdk)) {
+      aliveAt ??= Date.now()
+      if (platform === 'android') {
+        const w = run1(adb, ['-s', dev, 'shell', 'dumpsys', 'window'], { timeout: 30000 })
+        if (systemDialog(w)) { const d = answerDialog(adb, dev, app); if (d) dialogs.push(d); continue }
+        if (appFocused(w, app)) return JSON.stringify({ ready: true, seconds: secs(), ...(dialogs.length ? { dialogs } : {}) })
+      } else {
+        const h = screenHash(platform, dev, sdk)
+        if ((h && h === last) || Date.now() - aliveAt > 5000) return JSON.stringify({ ready: true, seconds: secs() })
+        last = h
+      }
+    }
+    sleepMs(500)
+  }
+  return JSON.stringify({ ready: false, seconds: secs(), appRunning: Boolean(aliveAt), ...(dialogs.length ? { dialogs } : {}), next: 'not up within the time: `probe`, then the stuck steps (app-restart, device-reset)' })
+}
+function probe(a) {
+  const o = optOf(a), dev = a[0], platform = o('--platform'), app = o('--app'), sdk = o('--sdk') || findTools().androidSdk
+  if (!dev || !['ios', 'android'].includes(platform)) throw new Error('probe <udid|serial> --platform ios|android [--app <id>] [--sdk <dir>]')
+  const up = deviceUp(platform, dev, sdk)
+  const dialog = up && platform === 'android' ? answerDialog(sdkTool(sdk, 'adb'), dev, app) : null
+  const alive = appAlive(platform, dev, app, sdk)
+  const screen = up ? screenHash(platform, dev, sdk) : null
+  if (dialog) return JSON.stringify({ device: up, app: alive, screen, state: dialog.kind, dialog, next: dialogNext(dialog, dev) })
+  const state = up === false ? 'device down' : alive === false ? 'app not running' : 'up'
+  return JSON.stringify({ device: up, app: alive, screen, state, next: { 'device down': '`device-reset`, then reinstall and continue', 'app not running': 'the app crashed or was closed: a critical finding if your last action closed it (with the steps), then relaunch it and go on', up: 'compare screen with the probe before your last tap: the same hash after a tap that should change the screen, twice → `app-restart`' }[state] })
+}
+// The guest's CPU busy share between two /proc/stat "cpu" lines (user nice system idle iowait irq softirq steal); steal is busy.
+export function cpuBusy(a, b) {
+  const f = (l) => String(l).trim().split(/\s+/).slice(1, 9).map(Number), x = f(a), y = f(b), d = y.map((v, i) => v - (x[i] || 0))
+  const total = d.reduce((t, v) => t + v, 0), idle = d[3] + (d[4] || 0)
+  return total > 0 ? Math.round((100 * (total - idle)) / total) : 0
+}
+// Settled: two 3 s samples in a row at most 50% busy. A cold boot reports sys.boot_completed while it still optimizes
+// packages and starts services for minutes (measured 110–177 s at 95–100% CPU); an app used then misses Android's 5 s input deadline.
+export const SETTLE = { busyPct: 50, samples: 2, maxS: 180 }
+export function settleLoop(sample, maxS = SETTLE.maxS, clock = Date.now) {
+  const t0 = clock(), samples = []
+  while (clock() - t0 < maxS * 1000) {
+    const b = sample()
+    if (b === null) { sleepMs(2000); continue }
+    samples.push(b)
+    if (samples.length >= SETTLE.samples && samples.slice(-SETTLE.samples).every((x) => x <= SETTLE.busyPct)) return { settled: true, seconds: Math.round((clock() - t0) / 1000), busy: samples }
+  }
+  return { settled: false, seconds: Math.round((clock() - t0) / 1000), busy: samples }
+}
+function settle(adb, serial, maxS) {
+  return settleLoop(() => { const l = run1(adb, ['-s', serial, 'shell', 'head -n 1 /proc/stat; sleep 3; head -n 1 /proc/stat'], { timeout: 20000 }).split('\n').filter((x) => x.startsWith('cpu ')); return l.length === 2 ? cpuBusy(l[0], l[1]) : null }, maxS)
+}
+// Maestro for android-screen.mjs: the plugin's own copy (never a user's Maestro, no shell profile changed), from the
+// release zip, refused unless it is byte-for-byte the release tested (SHA-256 taken 2026-10-20, 314,886,578 bytes).
+export const MAESTRO_ZIP_SHA256 = '5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a'
+export function sha256File(f) {
+  const h = crypto.createHash('sha256'), fd = fs.openSync(f, 'r'), b = Buffer.alloc(1 << 20)
+  try { for (let n; (n = fs.readSync(fd, b, 0, b.length, null)) > 0;) h.update(b.subarray(0, n)) } finally { fs.closeSync(fd) }
+  return h.digest('hex')
+}
+function maestroInstall() {
+  const dir = maestroDir(), win = process.platform === 'win32', bin = path.join(dir, 'bin', win ? 'maestro.bat' : 'maestro')
+  if (fs.existsSync(bin)) return `Maestro ${MAESTRO_VERSION} is installed: ${bin}`
+  const java = findTools().javaHome
+  if (!java) throw new Error('no Java 17 found (JAVA_HOME, or Homebrew openjdk@17 on macOS) — Maestro needs it, as the Android build does: install it and run maestro-install again')
+  const tmp = `${dir}.part`, zip = `${tmp}.zip`, url = `https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip`
+  fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true })
+  try {
+    execFileSync('curl', ['-fsSL', '--retry', '2', '-o', zip, url], { stdio: 'ignore', timeout: 600000 })
+    const got = sha256File(zip)
+    if (got !== MAESTRO_ZIP_SHA256) throw new Error(`the download is not the release this plugin was tested with (SHA-256 ${got}, expected ${MAESTRO_ZIP_SHA256}) — nothing installed`)
+    if (win) execFileSync('tar', ['-xf', zip, '-C', tmp], { stdio: 'ignore', timeout: 300000 })
+    else execFileSync('unzip', ['-qo', zip, '-d', tmp], { stdio: 'ignore', timeout: 300000 })
+    if (!fs.existsSync(path.join(tmp, 'maestro', 'bin'))) throw new Error('the download has no maestro/bin')
+    fs.renameSync(path.join(tmp, 'maestro'), dir)
+  } catch (e) { throw new Error(`Maestro ${MAESTRO_VERSION} not installed: ${e.message.split('\n')[0]} (${url})`) } finally { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(zip, { force: true }) }
+  if (!win) fs.chmodSync(bin, 0o755)
+  return `Maestro ${MAESTRO_VERSION} installed: ${bin} (Java ${java})`
 }
 export function staleOf(logText, idleMin, alive, up, minutes = STALL_MIN) {
   const lines = logText.split('\n').map((l) => l.replace(/\r$/, '')).filter(Boolean)
@@ -754,14 +976,14 @@ function deviceReset(a) {
   const killed = killFlutterFor(dev)
   if (platform === 'ios') {
     if (!MAC) throw new Error('iOS simulators exist only on macOS')
-    const d = ownIos(dev); if (!d) throw new Error(`${dev} is not one of the plugin's simulators (app-factory-*) — never reset a user's device`)
+    const d = ownIos(dev); if (!d) throw new Error(`${dev} is not one of the plugin's simulators (app-factory-*) — never reset a user's device; on a real iPhone instead: app-restart, then uninstall and reinstall the app (\`xcrun devicectl device uninstall app --device ${dev} <bundle id>\`, then run the test again — flutter test installs it)`)
     run1('xcrun', ['simctl', 'shutdown', dev]); run1('xcrun', ['simctl', 'erase', dev]); run1('xcrun', ['simctl', 'boot', dev])
     const up = run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(dev)
     if (!up) throw new Error(`${d.name} did not boot again after the reset`)
     return `reset ${d.name} (${dev}): ${killed.length} flutter process(es) stopped, shut down (its memory freed), erased (its apps and data removed), booted — reinstall happens on the next flutter test; for mobile-mcp run npx -y mobilecli agent install --device ${dev}`
   }
   if (!sdk) throw new Error('no Android SDK found — pass --sdk')
-  const avd = avdOf(sdk, dev); if (!avd.startsWith('af-')) throw new Error(`${dev} (${avd || 'unknown'}) is not one of the plugin's emulators (af-*) — never reset a user's device`)
+  const avd = avdOf(sdk, dev); if (!avd.startsWith('af-')) throw new Error(`${dev} (${avd || 'unknown'}) is not one of the plugin's emulators (af-*) — never reset a user's device${/^emulator-\d+$/.test(dev) ? '' : `; on a real phone instead: app-restart, then \`adb -s ${dev} uninstall <applicationId>\` and run the test again (flutter test installs it), or reconnect the cable if adb lost it`}`)
   if (app) run1(sdkTool(sdk, 'adb'), ['-s', dev, 'shell', 'am', 'force-stop', app])
   run1(sdkTool(sdk, 'adb'), ['-s', dev, 'emu', 'kill'])
   for (let i = 0; i < 30 && run1(sdkTool(sdk, 'adb'), ['devices']).includes(dev); i++) sleepMs(1000)
@@ -806,6 +1028,11 @@ function run([cmd, ...a]) {
   if (cmd === 'stale') return stale(a)
   if (cmd === 'app-restart') return appRestart(a)
   if (cmd === 'device-reset') return deviceReset(a)
+  if (cmd === 'wait-app') return waitApp(a)
+  if (cmd === 'probe') return probe(a)
+  if (cmd === 'settle') { const sdk = optOf(a)('--sdk') || findTools().androidSdk; if (!a[0] || !sdk) throw new Error('settle <serial> [--sdk <dir>]'); return JSON.stringify(settle(sdkTool(sdk, 'adb'), a[0])) }
+  if (cmd === 'maestro-install') return maestroInstall()
+  if (cmd === 'phone') return phoneCmd(a)
   if (cmd === 'layout-lint') return layoutLintCmd(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'secret') return secret(a)
   if (cmd === 'scope') return scope(a)
@@ -847,6 +1074,14 @@ function run([cmd, ...a]) {
     return 'ok'
   }
   const s = load()
+  if (cmd === 'scenario') {
+    const [sub, on, n, ...rest] = a, devs = ['ios-se', 'ios-17', 'ios-pro-max', 'android']
+    if (!['done', 'list'].includes(sub) || !devs.includes(on) || (sub === 'done' && (!/^\d+$/.test(n || '') || !rest.length))) throw new Error(`scenario done <${devs.join('|')}> <n> "<what was checked, filed ids>" | scenario list <device>`)
+    const mine = ((s.scenarios ||= {})[on] ||= {})
+    if (sub === 'list') return Object.keys(mine).length ? Object.entries(mine).map(([k, v]) => `scenario ${k} done on ${on} at ${v.at}: ${v.summary}`).join('\n') : `no scenario done on ${on} yet`
+    mine[n] = { summary: rest.join(' '), at: now() }; save(s)
+    return `scenario ${n} recorded as done on ${on}`
+  }
   if (cmd === 'feature') {
     const [id, status, ...title] = a
     if (!id || !['failing', 'passing', 'blocked'].includes(status)) throw new Error('feature <id> <failing|passing|blocked> [title...]')
@@ -1090,6 +1325,11 @@ function selftest() {
   assert.match(run(['brief']), /Open findings \(0\)/)
   run(['feature', 'AC1', 'passing'])
   run(['handoff', 'audit', 'all good'])
+  // senior QA scenarios recorded per device, so a restarted tester skips the done ones
+  assert.equal(run(['scenario', 'list', 'android']), 'no scenario done on android yet')
+  assert.equal(run(['scenario', 'done', 'android', '3', 'navigation: back on every node; filed X7']), 'scenario 3 recorded as done on android')
+  assert.match(run(['scenario', 'list', 'android']), /^scenario 3 done on android at .*: navigation: back on every node; filed X7$/); assert.equal(run(['scenario', 'list', 'ios-se']), 'no scenario done on ios-se yet', 'per device: scenario 6 runs on every iPhone')
+  assert.throws(() => run(['scenario', 'done', 'android', 'three', 'x']), /scenario done <ios-se\|ios-17\|ios-pro-max\|android> <n>/); assert.throws(() => run(['scenario', 'done', 'widget', '1', 'x']), /scenario done/)
   assert.deepEqual(JSON.parse(run(['status'])), { features: 1, passing: 1, blocked: 0, openFindings: 0, blocking: 0, blockingByOwner: { logic: 0, ui: 0, shared: 0, unrouted: 0 }, pendingDevice: 0, handoffs: 1 })
   run(['log', 'build', 'running', 'xcodebuild', 'test'])
   const md = fs.readFileSync(path.join(dir(), 'PROGRESS.md'), 'utf8')
@@ -1394,7 +1634,9 @@ flutter:
   fs.writeFileSync(path.join(app, 'lib/theme.dart'), 'const a = Color(0xFF1A73E8); const b = Color.fromARGB(255, 255, 255, 255); const t = Colors.transparent;\n')
   assert.match(run(['colors', '--root', app]), /all colours in lib\/ come from design\/colors.json \(2 design colours\)/)
   fs.writeFileSync(path.join(app, 'lib/bad.dart'), 'final x = Color(0xFF1A74E8);\nfinal y = Colors.red;\nfinal z = Color.fromRGBO(0, 0, 0, 1);\n')
-  assert.throws(() => run(['colors', '--root', app]), (e) => /3 colour\(s\)/.test(e.message) && /lib\/bad.dart:1 #1A74E8/.test(e.message) && /lib\/bad.dart:2 Colors.red/.test(e.message) && /lib\/bad.dart:3 #000000/.test(e.message))
+  fs.mkdirSync(path.join(app, 'lib/google_ads_material'))
+  fs.writeFileSync(path.join(app, 'lib/google_ads_material/app_hud.dart'), 'const c = Color(0x8A000000); final w = Colors.white;\n') // the ads template: not checked
+  assert.throws(() => run(['colors', '--root', app]), (e) => /3 colour\(s\)/.test(e.message) && /lib\/bad.dart:1 #1A74E8/.test(e.message) && /lib\/bad.dart:2 Colors.red/.test(e.message) && /lib\/bad.dart:3 #000000/.test(e.message) && !/google_ads_material/.test(e.message))
 
   // cleanup: deletes the run's leftovers only; keeps source, state and unknown files; devices only with the lock
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'clean-'))
@@ -1468,6 +1710,43 @@ flutter:
   assert.ok(!flutterFor('/home/u/flutter/bin/flutter test -d emulator-55541', 'emulator-5554'), 'another emulator')
   assert.ok(!flutterFor('tail -f /tmp/flow-emulator-5554.log', 'emulator-5554'))
   assert.deepEqual(JSON.parse(designDevice(375, 812, null, true)).configIni, { 'hw.lcd.width': 1125, 'hw.lcd.height': 2436, 'hw.lcd.density': 480 })
+  // by-hand device steps (wait-app, probe, settle): ported with their app-auditor-and-tester checks
+  // a real, connected phone or tablet — never the plugin's own emulator-NNNN serial, and never one that is offline/unauthorized
+  assert.deepEqual(realAndroidDevices('List of devices attached\n0a388e93\tdevice usb:1-1 product:razor model:Nexus_7 device:flo\nemulator-5554\tdevice product:sdk_gphone64_arm64 model:sdk_gphone64_arm64\n192.168.1.5:5555\tunauthorized\n'),
+    [{ serial: '0a388e93', state: 'device', model: 'Nexus_7' }], 'the emulator and the unauthorized Wi-Fi phone are both left out')
+  assert.deepEqual(realAndroidDevices('List of devices attached\n'), [], 'no devices attached')
+  // an iPhone/iPad devicectl has ever paired with, but is not plugged in or on the same network right now, is left out —
+  // only connectionProperties.tunnelState decides that, the same value its own printed "State" column uses
+  assert.deepEqual(realIosDevices({ result: { devices: [
+    { identifier: 'A', connectionProperties: { tunnelState: 'unavailable' }, hardwareProperties: { udid: 'U-A' }, deviceProperties: { name: 'Paired, unplugged' } },
+    { identifier: 'B', connectionProperties: { tunnelState: 'connected' }, hardwareProperties: { udid: 'U-B' }, deviceProperties: { name: 'Plugged in' } },
+    { identifier: 'C', connectionProperties: { tunnelState: 'disconnected' }, hardwareProperties: { udid: 'U-C' }, deviceProperties: { name: 'On Wi-Fi, tunnel down' } },
+  ] } }), [{ udid: 'U-B', name: 'Plugged in', type: '', developerMode: '' }], 'only a connected tunnel can be driven')
+  // a phone's own settings go back exactly as saved; Wi-Fi last, so a Wi-Fi-debugging link is cut only by the user's own state
+  assert.deepEqual(phoneRestoreCmds({ fontScale: '1.15', night: 'no', wifi: '1', data: '0', accel: '1', rotation: '0' }), [
+    ['shell', 'settings', 'put', 'system', 'font_scale', '1.15'], ['shell', 'cmd', 'uimode', 'night', 'no'], ['shell', 'settings', 'put', 'system', 'accelerometer_rotation', '1'],
+    ['shell', 'settings', 'put', 'system', 'user_rotation', '0'], ['shell', 'svc', 'data', 'disable'], ['shell', 'svc', 'wifi', 'enable']])
+  assert.deepEqual(phoneRestoreCmds({ fontScale: 'null', night: '', wifi: 'null', data: '', accel: '', rotation: '' }), [['shell', 'settings', 'delete', 'system', 'font_scale']], 'a value the phone never had is not invented')
+  assert.throws(() => run(['phone', 'save', 'emulator-5554', '--sdk', '/x']), /is an emulator/)
+  assert.match(run(['devices', 'real', '--sdk', '/no/such/sdk']), /^\{"android":\[\],"ios":/)
+  // settled: two 3 s samples in a row ≤ 50% busy; steal (the host taking the CPU) counts as busy
+  assert.equal(cpuBusy('cpu  100 0 100 800 0 0 0 0 0 0', 'cpu  150 0 150 900 0 0 0 0 0 0'), 50)
+  assert.equal(cpuBusy('cpu  0 0 0 0 0 0 0 0', 'cpu  10 0 10 20 0 0 0 60 0 0'), 80, 'steal is busy')
+  assert.equal(cpuBusy('cpu  0 0 0 0 0 0 0 0', 'cpu  0 0 0 50 50 0 0 0'), 0, 'iowait is idle')
+  { let t = 0; const seq = [95, 80, 40, 70, 30, 20, 10], clock = () => t, sample = () => { t += 3000; return seq.shift() }
+    assert.deepEqual(settleLoop(sample, 180, clock), { settled: true, seconds: 18, busy: [95, 80, 40, 70, 30, 20] }) }
+  { let t = 0; assert.deepEqual(settleLoop(() => { t += 3000; return 90 }, 9, () => t), { settled: false, seconds: 9, busy: [90, 90, 90] }, 'never settled: it goes on after maxS') }
+  // Android's dialogs: the focused window names the process (taken from a real emulator's dumpsys window and uiautomator dump)
+  assert.deepEqual(systemDialog('  mCurrentFocus=Window{47bbcea u0 Application Not Responding: com.livestreetview.live_street_view}\n  mFocusedApp=ActivityRecord{a41604e u0 com.google.android.permissioncontroller/.GrantPermissionsActivity t9}'), { kind: 'not responding', process: 'com.livestreetview.live_street_view' })
+  assert.deepEqual(systemDialog('mCurrentFocus=Window{1a2b u0 Application Error: com.android.systemui}'), { kind: 'stopped', process: 'com.android.systemui' })
+  assert.equal(systemDialog('mCurrentFocus=Window{5c u0 com.example.app/com.example.app.MainActivity}'), null)
+  const dump = '<node index="0" text="Close app" resource-id="android:id/aerr_close" class="android.widget.Button" package="android" clickable="true" bounds="[70,1138][1010,1264]" /><node index="1" text="Wait" resource-id="android:id/aerr_wait" class="android.widget.Button" package="android" clickable="true" bounds="[70,1264][1010,1390]" />'
+  assert.deepEqual(buttonCenter(dump, 'android:id/aerr_wait'), [540, 1327]); assert.deepEqual(buttonCenter(dump, 'android:id/aerr_close'), [540, 1201]); assert.equal(buttonCenter(dump, 'android:id/aerr_mute'), null)
+  assert.ok(appFocused('  mCurrentFocus=Window{d2177ff u0 com.example.app/com.example.app.MainActivity}', 'com.example.app'))
+  assert.ok(!appFocused('mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity}', 'com.example.app') && !appFocused('mCurrentFocus=Window{1 u0 com.example.application/.Main}', 'com.example.app') && !appFocused('mCurrentFocus=Window{1 u0 Application Not Responding: com.example.app}', 'com.example.app'))
+  assert.throws(() => run(['wait-app', 'emulator-5554', '--platform', 'android']), /wait-app <udid\|serial> --platform ios\|android --app <id>/)
+  assert.equal(whose('com.example.app', 'com.example.app'), 'app'); assert.equal(whose('com.example.app:remote', 'com.example.app'), 'app')
+  assert.equal(whose('com.android.systemui', 'com.example.app'), 'other'); assert.equal(whose('com.example.application', 'com.example.app'), 'other')
   return 'selftest ok'
 }
 

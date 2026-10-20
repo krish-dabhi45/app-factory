@@ -77,10 +77,19 @@ const active = (cwd) => {
   return [root, cwd, m && m[1]].filter(Boolean).some((d) => fs.existsSync(path.join(d, '.pipeline')))
 }
 
+// A fixed pause in a test agent: it waits the full time on a fast device and not long enough on a slow one (an
+// app-auditor-and-tester audit spent 27 min in 368 of them; `timeout 22 tail -f /dev/null` stood in for sleep). Only
+// for sub-agents (agent_id present): the chat's own `sleep 300` is the timer for the user's answers to the questions.
+const PAUSE = /(?:^|[;&|(){}\n]|\b(?:do|then|else)\s)\s*(?:\S*\/)?sleep\s+(?:(?:[5-9]|\d{2,})(?:\.\d+)?s?|\d+(?:\.\d+)?[mhd])(?=\s|$|[;&|)])|\btail\s+-f\s+\/dev\/null\b/
+export const pause = (cmd) => PAUSE.test(bare(cmd)) || bodies(cmd).some((b) => PAUSE.test(bare(b)))
+
 // Returns the hook's stdout (JSON) or '' when the command may run.
 export function guard(input) {
   if (input.tool_name !== 'Bash' || !active(input.cwd)) return ''
-  const why = refuse(String((input.tool_input && input.tool_input.command) || ''))
+  const command = String((input.tool_input && input.tool_input.command) || '')
+  if (input.agent_id && pause(command)) return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+    permissionDecisionReason: 'app-factory guard: refused — a fixed pause of 5 s or more (sleep, tail -f /dev/null). Wait for what you need instead: after launching or reopening the app `node "<plugin>/scripts/pipeline.mjs" wait-app <udid|serial> --platform ios|android --app <id>` (returns as soon as it is up); after a tap that should change the screen `pipeline.mjs probe`; a device test run with `pipeline.mjs stale <log>`. A pause under 5 s (sleep 2) is allowed.' } })
+  const why = refuse(command)
   if (!why) return ''
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
     permissionDecisionReason: `app-factory safety guard: refused — ${WHAT[why]} can freeze or crash this computer, or kill or delete what is the user's. Do not try it another way. Memory is freed only by stopping the plugin's own devices (app-factory-… simulators, af-… emulators) as your task says; a stuck app or device: pipeline.mjs app-restart, then device-reset. If that is not enough, file a critical finding with what you saw and go on.` } })
@@ -108,6 +117,13 @@ function selftest() {
   assert.equal(d(proj, 'flutter test'), '')
   assert.equal(d(path.join(tmp, 'other'), 'sudo apt install x'), '', 'never the user\'s other projects')
   assert.equal(guard({ tool_name: 'Read', cwd: proj, tool_input: {} }), '')
+  // fixed pauses: refused for a test agent, never for the chat (its sleep 300 is the questions' timer)
+  const ag = (command) => guard({ tool_name: 'Bash', cwd: proj, agent_id: 'a1', tool_input: { command } })
+  for (const c of ['sleep 20', 'sleep 5', 'timeout 22 tail -f /dev/null', 'adb shell input tap 1 2; sleep 5', 'sleep 1m', 'for i in 1 2; do adb devices; sleep 10; done', "bash -c 'sleep 30'", 'tail -f /dev/null'])
+    assert.match(ag(c), /fixed pause of 5 s or more/, `agent: should refuse ${c}`)
+  for (const c of ['sleep 2', 'sleep 0.5', 'sleep 4.9', 'git commit -m "wait: sleep 30 no more"', 'tail -f app.log | grep -m1 ready', 'node pipeline.mjs wait-app emulator-5554 --platform android --app com.x'])
+    assert.equal(ag(c), '', `agent: should allow ${c}`)
+  assert.equal(d(proj, 'sleep 300'), '', 'the chat: the questions\' 5-minute timer')
   fs.rmSync(tmp, { recursive: true, force: true })
   return 'selftest ok'
 }

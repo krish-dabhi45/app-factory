@@ -441,7 +441,7 @@ function affected(s, a) {
   const i = a.indexOf('--root'), root = i >= 0 ? path.resolve(a[i + 1]) : process.cwd()
   const pi = a.indexOf('--platform')
   if (pi >= 0) return affectedOn(s, root, a[pi + 1])
-  const base = a.filter((x, j) => j !== i && j !== i + 1)[0]
+  const base = a.filter((x, j) => i < 0 || (j !== i && j !== i + 1))[0]
   if (!base) throw new Error('affected <baseRef> [--root <dir>]')
   const changed = [...new Set([...git(root, 'diff', '--name-only', base), ...git(root, 'ls-files', '--others', '--exclude-standard')])]
     .filter((f) => /^(lib|integration_test|test|assets|pubspec\.yaml|ios|android)/.test(f))
@@ -1140,7 +1140,7 @@ function run([cmd, ...a]) {
   if (cmd === 'coverage') {
     const i = a.indexOf('--root')
     const root = i >= 0 ? path.resolve(a[i + 1]) : path.dirname(dir())
-    return coverage(s, a.filter((x, j) => j !== i && j !== i + 1)[0], root)
+    return coverage(s, a.filter((x, j) => i < 0 || (j !== i && j !== i + 1))[0], root)
   }
   if (cmd === 'finding' && a[0] === 'resolve') {
     const f = s.findings.find((x) => x.id === a[1])
@@ -1389,6 +1389,13 @@ function selftest() {
   assert.throws(() => run(['coverage', 'items', '--root', root]), /NOT COVERED: AC2$/m) // AC120 is not AC12, lib/ is not a test
   fs.writeFileSync(path.join(root, 'test/domain/b_test.dart'), "testWidgets('AC2 shows it', (t) async {}); // testAC12_x")
   assert.match(run(['coverage', '--root', root]), /3\/3 criteria covered/)
+  { // without --root (the project is the folder of .pipeline/): the group name is kept, not dropped as a --root value
+    const env0 = process.env.PIPELINE_DIR, own = fs.mkdtempSync(path.join(os.tmpdir(), 'cov-noroot-'))
+    fs.mkdirSync(path.join(own, '.pipeline'))
+    fs.copyFileSync(file(), path.join(own, '.pipeline', 'state.json'))
+    process.env.PIPELINE_DIR = path.join(own, '.pipeline')
+    try { assert.throws(() => run(['coverage', 'items']), /Error: coverage of group items: /) } finally { process.env.PIPELINE_DIR = env0 }
+  }
   // a blocked criterion (key not provided) needs no test, never counts as blocking, and shows in PROGRESS.md
   assert.throws(() => run(['feature', 'AC2', 'blocked']), /blocked <reason/)
   fs.rmSync(path.join(root, 'test/domain/b_test.dart'))
@@ -1538,6 +1545,8 @@ function selftest() {
   put1('lib/domain/items.dart', 'a2')
   const af = JSON.parse(run(['affected', head, '--root', pa]))
   assert.deepEqual(af.criteria, ['AC1']) // AC2 is blocked: never re-run
+  { const cwd0 = process.cwd(); process.chdir(pa) // without --root (the final audit's form): the base ref is kept
+    try { assert.deepEqual(JSON.parse(run(['affected', head])).criteria, ['AC1']) } finally { process.chdir(cwd0) } }
   assert.equal(af.name, '\\b(AC1)\\b')
   put1('lib/main.dart', 'm2')
   assert.deepEqual(JSON.parse(run(['affected', head, '--root', pa])).criteria, ['AC1', 'AC5', 'AC12'])

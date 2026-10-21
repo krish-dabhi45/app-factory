@@ -54,6 +54,7 @@
 //   devices claim <project> | devices release <project> | devices status
 //   devices real [--sdk <dir>] — the real phones connected now (adb: not an emulator, state "device"; iOS: devicectl
 //                           tunnelState "connected"): {"android":[{serial,model}],"ios":[{udid,name,type,developerMode}]}
+//   devices up android|ios [--sdk <dir>] — no phone connected: the plugin's own device (emulator af-standard / simulator app-factory-iphone-17), created if missing, started in its window, booted and settled; prints its serial or udid
 //   phone save|restore <serial> — a real Android phone's own settings (font scale, dark mode, Wi-Fi, mobile data,
 //                           rotation), saved before the run changes any and put back at `devices release` and `stop`
 //                         — one machine-wide lock on the shared test devices (simulators and emulators), so only one project's run uses them at a time
@@ -245,8 +246,9 @@ function devices([sub, project, ...rest]) {
   const f = deviceLock()
   const holder = () => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null)
   if (sub === 'real') return devicesReal([project, ...rest].filter(Boolean))
+  if (sub === 'up') { if (!['android', 'ios'].includes(project)) throw new Error('devices up android|ios [--sdk <dir>]'); return devicesUp(project, rest) }
   if (sub === 'status') { const h = holder(); return h ? `in use by ${h.project} since ${h.since}` : 'free' }
-  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status | devices real [--sdk <dir>]')
+  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status | devices real [--sdk <dir>] | devices up android|ios [--sdk <dir>]')
   const me = path.resolve(project)
   if (sub === 'claim') {
     fs.mkdirSync(path.dirname(f), { recursive: true })
@@ -988,13 +990,77 @@ function deviceReset(a) {
   run1(sdkTool(sdk, 'adb'), ['-s', dev, 'emu', 'kill'])
   for (let i = 0; i < 30 && run1(sdkTool(sdk, 'adb'), ['devices']).includes(dev); i++) sleepMs(1000)
   needMem(EMU_MB) // left stopped when the machine is short of memory: the error says what to do
-  // the emulator is the one process allowed to keep running (a window, like the Simulator app)
-  spawn(sdkTool(sdk, 'emulator'), ['-avd', avd, '-wipe-data', '-no-snapshot-load', '-no-audio'], { detached: true, stdio: 'ignore' }).unref()
-  run1(sdkTool(sdk, 'adb'), ['wait-for-device'], { timeout: 180000 })
-  let serial = ''
-  for (let i = 0; i < 150 && !serial; i++) { sleepMs(2000); serial = run1(sdkTool(sdk, 'adb'), ['devices']).split('\n').map((l) => l.split('\t')[0].trim()).find((x) => /^emulator-\d+$/.test(x) && avdOf(sdk, x) === avd && run1(sdkTool(sdk, 'adb'), ['-s', x, 'shell', 'getprop', 'sys.boot_completed']).trim() === '1') || '' }
+  const serial = bootAvd(sdk, avd, ['-wipe-data', '-no-snapshot-load'])
   if (!serial) throw new Error(`${avd} did not boot again within 5 minutes after the reset`)
   return `reset ${avd}: ${killed.length} flutter process(es) stopped, emulator stopped (its memory freed), started with its data wiped, booted as ${serial} — use that serial from now on`
+}
+
+// Starts the plugin's emulator [avd] in its own window — the one process allowed to keep running, like the Simulator
+// app — and returns its serial once Android has booted (sys.boot_completed 1), or '' after 5 minutes.
+function bootAvd(sdk, avd, extra) {
+  const adb = sdkTool(sdk, 'adb')
+  spawn(sdkTool(sdk, 'emulator'), ['-avd', avd, ...extra, '-no-audio'], { detached: true, stdio: 'ignore' }).unref()
+  run1(adb, ['wait-for-device'], { timeout: 180000 })
+  for (let i = 0; i < 150; i++) {
+    sleepMs(2000)
+    const serial = afEmulators(sdk).find((e) => e.avd === avd && run1(adb, ['-s', e.serial, 'shell', 'getprop', 'sys.boot_completed']).trim() === '1')
+    // adb's typed text counts as a stylus on the Android 35 image: "Try out your stylus" covered the app at the first text field
+    if (serial) { run1(adb, ['-s', serial.serial, 'shell', 'settings', 'put', 'secure', 'stylus_handwriting_enabled', '0']); return serial.serial }
+  }
+  return ''
+}
+const afEmulators = (sdk) => run1(sdkTool(sdk, 'adb'), ['devices']).split('\n').map((l) => l.split('\t')[0].trim()).filter((x) => /^emulator-\d+$/.test(x)).map((serial) => ({ serial, avd: avdOf(sdk, serial) })).filter((e) => e.avd.startsWith('af-'))
+// The newest available iOS runtime from `xcrun simctl list runtimes --json`, or null.
+export function newestIosRuntime(json) {
+  const v = (r) => String(r.version || '0').split('.').map(Number)
+  return (json.runtimes || []).filter((r) => r.isAvailable && /iOS/.test(r.name || r.identifier || '')).sort((a, b) => { const x = v(a), y = v(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (y[i] || 0) - (x[i] || 0); return 0 })[0] || null
+}
+// devices up android|ios: when no phone is connected — the plugin's own device, created if missing, started in its window
+// and ready. Android: emulator af-standard (medium_phone); iOS: simulator app-factory-iphone-17. Never a user's device;
+// memory is freed only by shutting down the plugin's own simulators, nothing is deleted.
+function devicesUp(platform, a) {
+  const t0 = Date.now(), secs = () => Math.round((Date.now() - t0) / 1000)
+  if (platform === 'ios') {
+    if (!MAC) throw new Error('iOS simulators exist only on macOS with Xcode — use `devices up android`')
+    const name = 'app-factory-iphone-17'
+    const all = Object.values(JSON.parse(run1('xcrun', ['simctl', 'list', 'devices', '--json']) || '{"devices":{}}').devices).flat()
+    let d = all.find((x) => x.name === name && x.isAvailable !== false), created = false
+    if (!d) {
+      const rt = newestIosRuntime(JSON.parse(run1('xcrun', ['simctl', 'list', 'runtimes', '--json']) || '{}'))
+      if (!rt) throw new Error('no iOS simulator runtime installed — Xcode → Settings → Components → iOS')
+      const type = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17'
+      const udid = run1('xcrun', ['simctl', 'create', name, type, rt.identifier]).trim()
+      if (!udid) throw new Error(`could not create ${name} (${type}, ${rt.name}) — \`xcrun simctl list devicetypes\` lists the iPhones this Xcode has`)
+      d = { udid, name, state: 'Shutdown' }; created = true
+    }
+    if (d.state !== 'Booted') run1('xcrun', ['simctl', 'boot', d.udid])
+    run1('open', ['-a', 'Simulator'])
+    run1('xcrun', ['simctl', 'bootstatus', d.udid, '-b'], { timeout: 300000 })
+    if (!run1('xcrun', ['simctl', 'list', 'devices', 'booted']).includes(d.udid)) throw new Error(`${name} did not boot`)
+    return JSON.stringify({ platform, udid: d.udid, name, created, seconds: secs() })
+  }
+  const t = findTools(), sdk = optOf(a)('--sdk') || t.androidSdk
+  if (!sdk) throw new Error('no Android SDK found (ANDROID_HOME, ANDROID_SDK_ROOT or the default folder) — pass --sdk <dir>')
+  const avd = 'af-standard', adb = sdkTool(sdk, 'adb')
+  const running = afEmulators(sdk).find((e) => run1(adb, ['-s', e.serial, 'shell', 'getprop', 'sys.boot_completed']).trim() === '1')
+  if (running) return JSON.stringify({ platform, serial: running.serial, avd: running.avd, created: false, started: false, seconds: secs() })
+  let created = false
+  if (!run1(sdkTool(sdk, 'emulator'), ['-list-avds']).split(/\r?\n/).includes(avd)) {
+    const img = t.androidImage, imgDir = path.join(sdk, ...img.split(';'))
+    if (!fs.existsSync(imgDir)) throw new Error(`the emulator image ${img} is not installed — run \`"${sdkTool(sdk, 'sdkmanager')}" "${img}"\` (about 1.5 GB), then devices up android again`)
+    if (!t.javaHome) throw new Error('no Java 17 (JAVA_HOME, or Homebrew openjdk@17 on macOS) — avdmanager needs it')
+    try { execFileSync(sdkTool(sdk, 'avdmanager'), ['create', 'avd', '-n', avd, '-k', img, '-d', 'medium_phone'], { input: 'no\n', stdio: ['pipe', 'ignore', 'pipe'], env: { ...process.env, JAVA_HOME: t.javaHome }, timeout: 120000 }) }
+    catch (e) { throw new Error(`could not create ${avd}: ${String(e.stderr || e.message).trim().split('\n').pop()}`) }
+    created = true
+  }
+  if (MAC) for (const s of Object.values(JSON.parse(run1('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']) || '{"devices":{}}').devices).flat()) if (/^app-factory-/.test(s.name)) run1('xcrun', ['simctl', 'shutdown', s.udid])
+  needMem(EMU_MB)
+  const disk = Math.floor((fs.statfsSync(os.homedir()).bavail * fs.statfsSync(os.homedir()).bsize) / 1073741824)
+  if (disk < 6) throw new Error(`${disk} GB free on the disk — the emulator needs 6 GB; nothing is deleted: free disk space, then devices up android again`)
+  const serial = bootAvd(sdk, avd, ['-no-snapshot-save'])
+  if (!serial) throw new Error(`${avd} did not boot within 5 minutes — \`adb devices\` and the emulator window show why; stop it (adb -s <serial> emu kill) and run devices up android once more`)
+  const settled = settle(adb, serial, SETTLE.maxS)
+  return JSON.stringify({ platform, serial, avd, created, started: true, settled, seconds: secs() })
 }
 
 // ── Sizes that cannot fit every phone (build skill U15) ────────────────────────────────────────────────────
@@ -1709,6 +1775,9 @@ flutter:
   if (typeof path.matchesGlob === 'function') for (const g of pats) for (const f of files) assert.equal(globMatch(f, g), path.matchesGlob(f, g), `${f} ~ ${g}`)
   const host = JSON.parse(run(['host'])); assert.equal(host.os, process.platform); assert.equal(typeof host.ios, 'boolean')
   assert.ok(+run(['freemem']) > 0 && +run(['freedisk', os.tmpdir()]) >= 0)
+  { const rt = (name, version, ok = true) => ({ name, version, identifier: name, isAvailable: ok })
+    assert.equal(newestIosRuntime({ runtimes: [rt('iOS 18.2', '18.2'), rt('iOS 26.1', '26.1'), rt('iOS 27.0', '27.0', false), rt('watchOS 26.0', '26.0'), rt('iOS 26.0', '26.0')] }).name, 'iOS 26.1', 'newest available iOS, not watchOS, not an unavailable one')
+    assert.equal(newestIosRuntime({ runtimes: [] }), null) }
   assert.equal(needMem(2500, 1839, true), '1839', 'macOS only reports (v4: emulator ran at 1,839 MB free)')
   assert.throws(() => needMem(2500, 1800, false), /only 1800 MB .* start nothing/)
   assert.equal(needMem(2500, 6000, false), '6000')

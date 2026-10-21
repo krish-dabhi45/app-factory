@@ -25,7 +25,7 @@ Sections 1 and 2, and the per-project uninstall in section 8, were run on this m
 | Needed | Check with | On this Mac |
 |---|---|---|
 | Claude Code extension in VS Code, signed in | Claude Code panel opens and answers | 2.1.283 |
-| Xcode with an iOS Simulator runtime | `xcrun simctl list runtimes` | Xcode 26.1.1, iOS 26.1 |
+| Xcode with an iOS Simulator runtime | `xcrun simctl list runtimes` | Xcode 27.0, iOS 26.1 |
 | Node.js and npx | `node -v && npx -v` | 26.7.0, 11.19.0 |
 | git | `git --version` | 2.50.1 |
 | Flutter, for Flutter apps | `"/Users/mach/Flutter Workspace/flutter/bin/flutter" --version` | 3.38.5 |
@@ -225,7 +225,7 @@ Every Flutter app gets ads + Remote Config by default, whether or not the PRD me
 - **IDs:** debug builds always use Google's demo ad units for the running platform; a release build never serves a demo unit — the owner puts the real ids in Remote Config (and the defaults JSON) and replaces the sample App IDs.
 - **Premium:** the moment it is on (purchase, restore, or the store's answer at launch) every ad id becomes `"11"`: nothing loads or shows, and at launch consent and the ad SDK are skipped.
 - **Tested:** the template's unit tests and device tests (real SDK, Google test ads), plus each placement and one Premium journey in the app's flow tests.
-- **iOS builds** with this pattern need Xcode 26.2+ (Firebase's Swift package requires Swift 6.2.3).
+- **iOS builds** with this pattern need Xcode 26.2+ (Firebase's Swift package requires Swift 6.2.3); built and tested with Xcode 27.0. After an Xcode update, its license must be accepted (`sudo xcodebuild -license accept`, by you) — until then `git`, `xcrun` and Flutter refuse to run.
 
 ## 9c. Cleanup at the end of a run
 

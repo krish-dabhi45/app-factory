@@ -40,7 +40,7 @@ Flow: Figma link from the PRD — **asked for in the chat at once if the PRD has
 
 ## Requirements (the versions this was run with)
 
-- macOS with Xcode 26.1.1 and the iOS 26.1 Simulator runtime
+- macOS with Xcode 27.0 and the iOS 26.1 Simulator runtime (Xcode 26.2 or newer is needed for the ads pattern's Firebase packages)
 - Claude Code 2.1.283 (VS Code extension), signed in
 - Node.js 26.7.0 and npx 11.19.0; internet on the first run (`npx` downloads mobile-mcp 1.0.5 and mobilecli)
 - git 2.50.1 — every run makes the project a git repository

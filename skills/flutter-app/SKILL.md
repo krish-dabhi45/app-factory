@@ -1,6 +1,7 @@
 ---
 name: flutter-app
 description: How app-factory builds, audits and tests a Flutter app — project structure and file ownership, logic and data rules, UI rules, and the three kinds of tests. Use when building, fixing, reviewing or testing any Flutter app in an app-factory project (pubspec.yaml plus CONTRACT.md present), or when asked to structure a Flutter app or fix a Flutter layout error.
+user-invocable: false
 ---
 
 # Building a Flutter app in app-factory

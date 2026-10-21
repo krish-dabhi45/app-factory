@@ -1,6 +1,7 @@
 ---
 name: flutter-ads
 description: AdMob ads + Firebase Remote Config for a Flutter app built by app-factory — the team's common-flow pattern (splash interstitial/app open, onboarding native, home-tap interstitial rule, inner-screen banners, resume app open, rewarded, Premium = every id "11"), every value changeable from one Remote Config JSON key. Installed by scripts/ads-install.mjs from templates/flutter/ads. Every app-factory Flutter app gets it unless its PRD says the app has no ads. Use when CONTRACT.md section 9 (Ads) lists placements, or when asked to add, audit or move ads or Remote Config in a Flutter app.
+user-invocable: false
 ---
 
 # Flutter ads + Remote Config — the common-flow pattern
@@ -113,7 +114,7 @@ Each ad has a HIGH and a NORMAL id: HIGH is loaded first, NORMAL only when HIGH 
 
 - Installed with the template and run as they are: `test/google_ads_material/ads_rules_test.dart` (home tap rule, screen gates, platform test ids, release demo-id guard, Premium, wait times, Remote Config merge, resume rules, consent gate, no double full-screen ad) and `app_hud_test.dart`. Checked 2026-10-20 to fail when the rule is removed: screen gate "0", release demo-id guard, iOS test ids, resume skip, Premium-screen block, consent gate, double full-screen, invalid JSON; the banner collapse (device test) likewise on the phone.
 - `integration_test/ads_device_test.dart` on a phone or emulator with internet (unlocked): consent → SDK ready; adaptive banner loads full width; a failing banner gives its space back; the small native loads through the native factory; the in-app interstitial wait. Run it once per platform the contract has.
-- The launch ad, on a device: a shown full-screen ad waits for a person to close it, so the test runs the app's startup with the splash ids "11" — a mocked `flutter/assets` reply for `assets/remote_config_default.json`, with `rootBundle.evict` of that asset before and in tear-down (`rootBundle` caches it) — and checks the defaults loaded, `AdFlags.adsReady`, no full-screen ad left showing and the time; a second test preloads `InterstitialAdManager.splash` alone and expects it loaded within `splash_ad_wait_seconds`. `flutter run` shows the ad itself (step 7 of `/app-factory:ads-implementation`).
+- The launch ad, on a device: a shown full-screen ad waits for a person to close it, so the test runs the app's startup with the splash ids "11" — a mocked `flutter/assets` reply for `assets/remote_config_default.json`, with `rootBundle.evict` of that asset before and in tear-down (`rootBundle` caches it) — and checks the defaults loaded, `AdFlags.adsReady`, no full-screen ad left showing and the time; a second test preloads `InterstitialAdManager.splash` alone and expects it loaded within `splash_ad_wait_seconds`. `flutter run` shows the ad itself (step 8 of `/app-factory:ads-implementation`).
 - Per placement in the Ads table, the app's flow test reaches the screen and checks the ad widget is there for a free user and absent for Premium; one Premium journey (test purchase, every ad screen, relaunch: no ad widget).
 
 ## 7. How the template relates to the build rules

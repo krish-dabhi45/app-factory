@@ -76,6 +76,14 @@ Running it again is safe. Anything starting with `error:` means it stopped and n
 
 ## 4. Run it
 
+app-factory has three commands; everything else in it (the flutter-app, flutter-ads and app-qa rule books) is read by its agents and is not in the `/` menu:
+
+| Command | What it does |
+|---|---|
+| `/app-factory:build-app` | Builds the app from `PRD.md`: contract and questions first, then the build, tests, senior QA and the final audit. Ads + Remote Config are in every app unless the PRD says no ads. |
+| `/app-factory:stop` | Stops a running build-app run from the chat that started it, frees its locks and devices, keeps all work. |
+| `/app-factory:ads-implementation` | Adds ads + Remote Config to an app that is already built: explores the entire app, then places every ad by the pattern (section 9b). |
+
 ### Figma design (optional)
 
 Put the Figma link (`https://www.figma.com/design/...`) in `PRD.md`, or pass it as `"figma"` in step 1. The import saves Figma's answers as they are, writes one small `design/import.json` (which PRD screen each frame shows, the PRD's colours), and `scripts/design-docs.mjs` writes every mapping document from them — no agent-written generator. On the first call, one agent imports the whole design as it is into `design/`, through the Figma MCP, before anything else happens:
@@ -213,7 +221,7 @@ Every Flutter app gets ads + Remote Config by default, whether or not the PRD me
 - **Where:** splash — interstitial (or app open, by a Remote Config flag), waiting at most 8 s; onboarding — one small native at the bottom; home feature taps — interstitial on every tap or every second tap (Remote Config); inner screens without a text field — a bottom banner (adaptive or collapsible); closing Premium from inside the app — interstitial; coming back to the app — app open (not after share, review, store or purchase, not on Premium); rewarded where the PRD has a reward. Nothing on rating, settings, legal pages, Premium itself or home's buttons and tab bar.
 - **Remote Config:** one JSON parameter (`<app>_v1`) holds every ad id (HIGH and NORMAL), every on/off flag, the waits, the native ad colours and Facebook's id/token; `assets/remote_config_default.json` is used until it arrives or when Firebase is not set up. Any id set to `"11"` switches that ad off.
 - **Install:** `scripts/ads-install.mjs` copies `lib/google_ads_material/` and its tests and patches Android and iOS (native-ad factories, App IDs, Facebook); the app only calls its API.
-- **An app that is already built** (or was built without ads): type `/app-factory:ads-implementation` in its window. It stops unless the git tree is clean, maps every screen to its placement by the pattern's table (no questions), installs and wires the pattern, adds the criteria and their tests in an app-factory project, runs analyze, every test, the builds and the device test, then commits locally (never pushes) and reports what was and was not verified.
+- **An app that is already built** (or was built without ads): type `/app-factory:ads-implementation` in its window. It stops unless the git tree is clean and a device (a connected phone, unlocked, or the plugin's own emulator or simulator) is there; explores the entire app — every screen and tap from the code, then every screen on the device — and places each ad by the pattern's table (no questions); installs and wires it, adds the criteria and their tests in an app-factory project, runs analyze, every test, the builds, the device tests and a walk through every placement on the device, then commits locally (never pushes) and reports the app map, the placements and what was and was not verified.
 - **IDs:** debug builds always use Google's demo ad units for the running platform; a release build never serves a demo unit — the owner puts the real ids in Remote Config (and the defaults JSON) and replaces the sample App IDs.
 - **Premium:** the moment it is on (purchase, restore, or the store's answer at launch) every ad id becomes `"11"`: nothing loads or shows, and at launch consent and the ad SDK are skipped.
 - **Tested:** the template's unit tests and device tests (real SDK, Google test ads), plus each placement and one Premium journey in the app's flow tests.

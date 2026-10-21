@@ -1,6 +1,7 @@
 ---
 name: app-qa
 description: How app-factory tests and audits an app — writing one device test per user flow, running them (parallel runners, affected-only re-runs), filing findings, fixing within scope, resolving with test evidence, blocked dependencies, the design comparison, senior QA journeys, and the one final audit that fixes. Use when testing, auditing or fixing an app in an app-factory project (CONTRACT.md and .pipeline/ present).
+user-invocable: false
 ---
 
 # Testing and auditing in app-factory

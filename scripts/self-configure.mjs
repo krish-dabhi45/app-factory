@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// SessionStart hook: makes a plugin install usable with zero manual steps beyond `claude plugin marketplace add
-// <source>` + `claude plugin install app-factory@<marketplace>` (no git clone, no local copy of this repo needed).
+// SessionStart hook: makes a plugin install usable with zero manual steps beyond adding the marketplace and installing
+// app-factory (VS Code `/plugins` dialog, or `claude plugin ...`) — no git clone, no local copy of this repo needed.
 // Runs on every session start in a project with app-factory enabled; both actions are idempotent (same result
 // every time on an already-set-up machine), so there is no "already configured" check to get wrong.
 //   1. configure.mjs's find()+write(), against *this* install's own workflows/build-app.js (wherever

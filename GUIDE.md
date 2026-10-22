@@ -68,18 +68,34 @@ Running it again is safe. Anything starting with `error:` means it stopped and n
 
 ## 2b. Install on a different machine (no git clone)
 
-This repo is on GitHub (`krish-dabhi45/app-factory`, **private**), so another machine installs from there instead of from a local folder — there is no `install.sh` to run, because there is no local copy of the repo to run it from. Once, in a terminal on that machine (needs git access to the repo — an SSH key that authenticates to github.com, or `gh auth login` for HTTPS; on a brand-new machine, `ssh -T git@github.com` once first so its host key is trusted):
+This repo is on GitHub (`krish-dabhi45/app-factory`, **private**), so another machine installs from there instead of from a local folder — there is no `install.sh` to run, because there is no local copy of the repo to run it from. Everything below happens inside the VS Code extension; no terminal and no `claude` command are needed (the extension carries its own copy of Claude Code, and `claude` is usually not on PATH — it isn't on this Mac).
 
-```sh
-claude plugin marketplace add krish-dabhi45/app-factory
-claude plugin install app-factory@app-factory-dev --scope project
+**Before the first install** that machine needs git access to the private repo, because the extension fetches it with that machine's own git: an SSH key that authenticates to github.com, or `gh auth login` for HTTPS. On a brand-new machine, run `ssh -T git@github.com` once so github.com's host key is trusted.
+
+**Once, on that machine**, with the project folder open in VS Code:
+
+1. Open the Claude Code panel and type `/plugins`. The **Manage plugins** dialog opens.
+2. **Marketplaces** tab → enter `krish-dabhi45/app-factory` → add it. It registers as `app-factory-dev` (the name inside `.claude-plugin/marketplace.json`).
+3. **Plugins** tab → `app-factory` → **Install** → **Install for this project**.
+4. Start a new chat.
+
+Or, instead of steps 1–3, paste this into a browser's address bar on that machine and press Return; the browser asks to open VS Code, and the same dialog opens on app-factory, asking first to add the marketplace and then for the scope (pick **Install for this project**):
+
+```text
+vscode://anthropic.claude-code/install-plugin?plugin=app-factory&marketplace=krish-dabhi45/app-factory
 ```
 
-Claude Code fetches the repo itself, into its own plugin cache (`~/.claude/plugins/cache/app-factory-dev/app-factory/<version>/`) — nothing is cloned into a folder you can see or have to manage. Open that project in VS Code, open the Claude Code panel, start a session: the plugin's `SessionStart` hook (`scripts/self-configure.mjs`) runs once automatically, points `workflows/build-app.js` at that machine's own Flutter/Android SDK/Java (the same thing `configure.mjs` does for a local install, just run against the cache copy instead of a source checkout), and copies `setup/install-app-factory/SKILL.md` to `~/.claude/skills/install-app-factory/` — so `/install-app-factory` exists on that machine from then on, with no manual file copying. From the next version onward, typing `/install-app-factory` there runs `claude plugin marketplace update app-factory-dev` + `claude plugin install app-factory@app-factory-dev --scope project` — the same two commands, every time, on any machine, local-dev or remote alike.
+(GitHub strips `vscode://` links from Markdown, which is why it's in a code block and has to be pasted.)
+
+The extension fetches the repo itself, into its own plugin cache (`~/.claude/plugins/cache/app-factory-dev/app-factory/<version>/`) — nothing is cloned into a folder you can see or have to manage. On the first chat, the plugin's `SessionStart` hook (`scripts/self-configure.mjs`) runs once automatically, points `workflows/build-app.js` at that machine's own Flutter/Android SDK/Java (the same thing `configure.mjs` does for a local install, just run against the cache copy instead of a source checkout), and copies `setup/install-app-factory/SKILL.md` to `~/.claude/skills/install-app-factory/` — so `/install-app-factory` exists on that machine from then on, with no manual file copying.
+
+**Every update after that**, on any machine: type `/install-app-factory` in the chat. It finds the extension's own Claude Code binary (PATH first, else the newest one under `~/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/`, the same lookup `install.sh` uses) and runs `plugin marketplace update app-factory-dev` + `plugin install app-factory@app-factory-dev --scope project` with it. The new version only reaches other machines once it is pushed to GitHub. Doing it by hand instead: `/plugins` → Marketplaces tab → refresh icon on `app-factory-dev`.
+
+Verified 2026-10-22 on this Mac (`claude` not on PATH, shell zsh): `/install-app-factory`'s two commands, run exactly as written, found the extension's binary (2.1.283), listed `app-factory-dev`, and installed app-factory into a scratch project (`.claude/settings.json` got `"app-factory@app-factory-dev": true`; uninstalled afterwards); with no binary anywhere it stops with `error: no Claude Code binary on PATH or in ~/.vscode/extensions`. The `/plugins` dialog steps and the `vscode://` link come from the extension's docs (code.claude.com/docs/en/vs-code, "Manage plugins" and "Share a plugin install link") and were **not run here**: this Mac already has a directory-source marketplace named `app-factory-dev`, and the docs say the dialog then refuses a different source with the same name ("nothing installs").
 
 Verified 2026-10-22: a renamed copy of this repo (so it wouldn't collide with the real `app-factory-dev` registration), with wrong machine paths deliberately baked into `workflows/build-app.js` (as a real GitHub clone from someone else's machine would have), installed under a `directory`-source marketplace the same way `plugin install` caches a GitHub source — `node self-configure.mjs` run directly against that cache corrected `ROOT` to the real cache path and `FLUTTER` to this machine's real Flutter, a second run changed nothing (idempotent), and `/install-app-factory`'s new content was copied byte-for-byte. **Not yet seen fire from an actual `SessionStart` hook on a real second machine** — the mechanics are proven, the end-to-end trigger is not.
 
-**If the repo is made public** later, the same two commands work without the SSH-key/`gh auth` requirement (`claude plugin marketplace add krish-dabhi45/app-factory` resolves over plain HTTPS).
+**If the repo is made public** later, the same steps work without the SSH-key/`gh auth` requirement (`krish-dabhi45/app-factory` then resolves over plain HTTPS).
 
 ## 3. Reload the window
 

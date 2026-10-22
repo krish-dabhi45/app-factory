@@ -12,3 +12,5 @@ node_modules/
 # nothing here should ever produce a .pipeline/, but ignore it in case a manual test is run in place)
 .pipeline/
 *.log
+
+.claude-plugin/

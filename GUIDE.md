@@ -47,7 +47,7 @@ Claude runs the installer for the folder that window has open and shows its outp
 
 Tested by running the command through the Claude Code binary in a fresh folder: it installed the plugin and printed the reload instruction. **Not tested:** typing it in the panel itself, so the panel's permission prompt for it has not been seen.
 
-`/install-app-factory` is a personal command stored at `~/.claude/skills/install-app-factory/SKILL.md`, so it is available in every VS Code window on this Mac. If it is missing, restore it with:
+`/install-app-factory` is a personal command stored at `~/.claude/skills/install-app-factory/SKILL.md`, so it is available in every VS Code window on this Mac. If it is missing (first install on this machine, or it was deleted), the plugin's `SessionStart` hook writes it back the next time a session starts in any project with app-factory installed — no manual step. To force it back immediately instead of waiting for that:
 
 ```sh
 mkdir -p ~/.claude/skills/install-app-factory && cp /Users/mach/testing/app-factory/setup/install-app-factory/SKILL.md ~/.claude/skills/install-app-factory/
@@ -65,6 +65,21 @@ What the installer does, in order:
 6. Confirms `.claude/settings.json` in the project contains `"app-factory@app-factory-dev": true`.
 
 Running it again is safe. Anything starting with `error:` means it stopped and nothing further was done.
+
+## 2b. Install on a different machine (no git clone)
+
+This repo is on GitHub (`krish-dabhi45/app-factory`, **private**), so another machine installs from there instead of from a local folder — there is no `install.sh` to run, because there is no local copy of the repo to run it from. Once, in a terminal on that machine (needs git access to the repo — an SSH key that authenticates to github.com, or `gh auth login` for HTTPS; on a brand-new machine, `ssh -T git@github.com` once first so its host key is trusted):
+
+```sh
+claude plugin marketplace add krish-dabhi45/app-factory
+claude plugin install app-factory@app-factory-dev --scope project
+```
+
+Claude Code fetches the repo itself, into its own plugin cache (`~/.claude/plugins/cache/app-factory-dev/app-factory/<version>/`) — nothing is cloned into a folder you can see or have to manage. Open that project in VS Code, open the Claude Code panel, start a session: the plugin's `SessionStart` hook (`scripts/self-configure.mjs`) runs once automatically, points `workflows/build-app.js` at that machine's own Flutter/Android SDK/Java (the same thing `configure.mjs` does for a local install, just run against the cache copy instead of a source checkout), and copies `setup/install-app-factory/SKILL.md` to `~/.claude/skills/install-app-factory/` — so `/install-app-factory` exists on that machine from then on, with no manual file copying. From the next version onward, typing `/install-app-factory` there runs `claude plugin marketplace update app-factory-dev` + `claude plugin install app-factory@app-factory-dev --scope project` — the same two commands, every time, on any machine, local-dev or remote alike.
+
+Verified 2026-10-22: a renamed copy of this repo (so it wouldn't collide with the real `app-factory-dev` registration), with wrong machine paths deliberately baked into `workflows/build-app.js` (as a real GitHub clone from someone else's machine would have), installed under a `directory`-source marketplace the same way `plugin install` caches a GitHub source — `node self-configure.mjs` run directly against that cache corrected `ROOT` to the real cache path and `FLUTTER` to this machine's real Flutter, a second run changed nothing (idempotent), and `/install-app-factory`'s new content was copied byte-for-byte. **Not yet seen fire from an actual `SessionStart` hook on a real second machine** — the mechanics are proven, the end-to-end trigger is not.
+
+**If the repo is made public** later, the same two commands work without the SSH-key/`gh auth` requirement (`claude plugin marketplace add krish-dabhi45/app-factory` resolves over plain HTTPS).
 
 ## 3. Reload the window
 

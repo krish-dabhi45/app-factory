@@ -1,6 +1,18 @@
 {
-  "description": "app-factory: refuses system commands that can freeze or crash the computer in an app-factory project (sudo, drop_caches, swapoff, pkill/killall, reboot, disk and device wipes); desktop notification when Claude needs you or has finished (macOS, Linux, Windows; quiet while your own notification hook is set); replaces stored API key values in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents",
+  "description": "app-factory: on every session start, points the plugin at this machine's Flutter/Android SDK/Java and installs /install-app-factory if missing (no manual setup, no git clone, works the same from a GitHub-source install); refuses system commands that can freeze or crash the computer in an app-factory project (sudo, drop_caches, swapoff, pkill/killall, reboot, disk and device wipes); desktop notification when Claude needs you or has finished (macOS, Linux, Windows; quiet while your own notification hook is set); replaces stored API key values in Bash/Read/Grep output with their names; caps large Bash outputs of its own run's agents",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/self-configure.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash|Read|Grep",

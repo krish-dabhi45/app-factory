@@ -21,7 +21,7 @@ async function sim(name, args, over = {}) {
     if (label === 'senior QA setup') return { appPath: 'a', bundleId: 'x' }
     if (label.startsWith('senior QA')) return { scenarios: ['1'], filed: [], ...st() }
     if (label.startsWith('final audit')) return { verdict: 'pass', passing: [], fixed: [], removed: [], ...st() }
-    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, output: 'ok' }
+    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, output: 'ok' }
     if (label.startsWith('lessons')) return { timing: 'ended', cleanup: 'cleanup: freed 1 MB' }
     return null
   }
@@ -69,10 +69,15 @@ x = await sim('text typed after the command is a note, not a stage', 'You are a 
 check(x.res.stage !== undefined && !x.res.error && x.calls.includes('design import') && /The user's note for this run: "You are a senior app developer, no extra scope\."/.test(x.prompts['design import']) && /"note":"You are a senior app developer, no extra scope\."/.test(x.res.nextStep || ''), 'free text does not fail the launch; it reaches every agent and the build-stage args')
 x = await sim('a bare stage word still works', 'build')
 check(x.calls.includes('setup (approved contract)'), 'the word "build" is the build stage')
-x = await sim('build: keys reach device tests only through the secrets file; a key in a file fails the run', { stage: 'build' }, { 'final checks': { designOk: true, assetsOk: true, secretsOk: false, output: 'SECRETS (1)' } })
+x = await sim('build: keys reach device tests only through the secrets file; a key in a file fails the run', { stage: 'build' }, { 'final checks': { designOk: true, assetsOk: true, secretsOk: false, releaseOk: true, output: 'SECRETS (1)' } })
 check(/secret define\) -d S1/.test(x.prompts['test r1 iOS runner 1']) && /secret native/.test(x.prompts['test setup r1']) && /secret move\` then \`[^`]*secret scan/.test(x.prompts['integrate + gate']) && /secret move/.test(x.prompts['explore']), 'flow tests get --dart-define-from-file; worktrees get native keys; the gate scans')
 check(x.res.done === false, 'a key found by the final scan → not done')
 check(/iPhone SE \(3rd generation\)/.test(x.prompts.devices) && /iPhone 17 Pro Max/.test(x.prompts.devices) && /the iPhone SE \(375×667/.test(x.prompts['test r1 iOS runner 2']) && /iPhone 17 Pro Max \(440×956/.test(x.prompts['test r1 iOS runner 3']) && /cp "[^"]*templates\/flutter\/test\/ui\/fits_screen\.dart" test\/ui\/fits_screen\.dart/.test(x.prompts.interface) && ['senior QA setup', 'senior QA Android', 'explore', 'integrate + gate'].every((l) => /secret define\)/.test(x.prompts[l])), 'flow tests run on the smallest, a standard and the largest iPhone; the layout helper is shared')
+x = await sim('build: the release check gates the build and the end; owner items are logged, never guessed', { stage: 'build' }, { 'final checks': { designOk: true, assetsOk: true, secretsOk: true, releaseOk: false, output: 'Fix in code (1)\n- C4 the app has a paywall\n\nOwner before store release (2)\n- O1 store IDs still com.example\n- O3 Google\'s sample AdMob App ID' } })
+check(/scripts\/release-check\.mjs" \.\` \(its "Fix in code" list empty/.test(x.prompts['integrate + gate']) && /release-check\.mjs" \.\`/.test(x.prompts['final checks']), 'the gate and the final checks run release-check')
+check(x.res.done === false, 'a release-check code item at the end → not done')
+check(x.logs.some((l) => /before store release, the owner: O1 store IDs still com\.example \| O3 Google's sample AdMob App ID/.test(l)), 'the owner list is logged')
+check(/--no-premium. when section 9 says "No paid tier"/.test(x.prompts.interface) && /PremiumStore\.instance\.configure with ApiKeys\.revenuecatAppleKey/.test(x.prompts.interface), 'the interface installs Premium unless the contract says no paid tier, and wires the store keys')
 x = await sim('no iPhone SE: the runners still name their simulator by what it is', { stage: 'build' }, { devices: { ios: { standard: 'S1', small: '', large: 'S3' }, android: { standard: 'af-standard' }, androidInScope: true, freeMemoryMB: 4000 } })
 check(/the iPhone 17 Pro Max \(440×956/.test(x.prompts['test r1 iOS runner 2']) && !/iPhone SE \(375/.test(x.prompts['test r1 iOS runner 2']) && /PRD\.md, CONTRACT\.md and DECISIONS\.md: read them in/.test(x.prompts['test r1 iOS runner 2']), 'runner 2 on S3 is called the iPhone 17 Pro Max; runners read PRD.md in the project')
 // Linux and Windows: no iOS simulator, no Xcode — every device step on the Android emulator, no macOS-only command anywhere

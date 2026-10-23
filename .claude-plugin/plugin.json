@@ -1,6 +1,6 @@
 {
   "name": "app-factory",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "description": "PRD → contract (questions upfront; a missing key → a free service for now or a \"not available\" note; ads + Remote Config in every app unless the PRD says no ads) → parallel build per group (logic ∥ UI ∥ flow tests) → integrator + script gate → flow tests on parallel iOS simulators, Android alongside the fixers, affected-only re-runs → parallel senior QA → one final audit that fixes, with optimisation",
   "author": {
     "name": "mach"

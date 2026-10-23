@@ -2,8 +2,11 @@
 // Installs the ads + Remote Config pattern (skills/flutter-ads/SKILL.md) into a Flutter app — the only way
 // app-factory adds ads. Copies templates/flutter/ads/ (the tested common_flow_demo files) and patches the native
 // project; never overwrites a file that exists (a second run reports "kept").
-//   node ads-install.mjs <project>    → what it added/patched; exit 1 with the exact lines when a native file is not
-//                                       Flutter's default and has no ad factory yet (the caller adds them, then reruns)
+//   node ads-install.mjs <project> [--no-premium]
+//                                     → what it added/patched; exit 1 with the exact lines when a native file is not
+//                                       Flutter's default and has no ad factory yet (the caller adds them, then reruns).
+//                                       Also lib/premium_core/ (RevenueCat Premium, free uses per feature, paywall plan
+//                                       switches) and its packages; --no-premium when CONTRACT.md says the app has no paid tier
 //   node ads-install.mjs changes <project> <base>  → writes <project>/ADS_CHANGES.md: every file the ads work added,
 //                                       changed or deleted since <base>, from git (see changes())
 //   node ads-install.mjs selftest
@@ -29,7 +32,14 @@ const DEPS = [
   ['firebase_analytics', '13.0.0', 'ad revenue event ad_impression (google_ads_material/ad_impression.dart)'],
   ['firebase_crashlytics', '6.0.0', 'crash reports, set after RemoteConfigLoader.load when Firebase is configured (flutter-ads section 3)'],
   ['shimmer', '4.0.0', 'native ad loading shimmer (google_ads_material/native_ad_widget.dart)'],
+  ['purchases_flutter', '10.16.0', 'Premium from the store\'s entitlement (premium_core/premium_store.dart)'],
+  ['shared_preferences', '2.5.6', 'free uses per feature and the demo unlock (premium_core/)'],
 ]
+// the Premium layer: installed unless --no-premium (an app with no paid tier); its packages only with it
+const PREMIUM = 'premium_core/'
+const PREMIUM_DEPS = new Set(['purchases_flutter', 'shared_preferences'])
+const hasPremium = (root) => fs.existsSync(path.join(root, 'lib', PREMIUM))
+const depsFor = (premium) => DEPS.filter(([n]) => premium || !PREMIUM_DEPS.has(n))
 // The guide app's Info.plist text (common_flow_demo ios/Runner/Info.plist), shown if the app asks for tracking permission
 const ATT_TEXT = 'This identifier will be used to deliver personalized ads to you.'
 // google_mobile_ads 9.1.0's Package.swift says iOS 13; webview_flutter_wkwebview 3.27.1+ says iOS 15 → Swift Package Manager
@@ -54,8 +64,9 @@ function ids(root) {
   return { name, mainPath, fix }
 }
 
-export function install(root) {
+export function install(root, { premium = true } = {}) {
   const done = [], todo = []
+  const deps = depsFor(premium)
   const at = (...p) => path.join(root, ...p)
   const { mainPath, fix } = ids(root)
   if (!mainPath) throw new Error('no android/app/src/main/**/MainActivity.kt (Kotlin) — create the app with flutter create')
@@ -72,11 +83,11 @@ export function install(root) {
 
   // Dart: the ads layer, its tests, the defaults JSON
   for (const dir of ['lib', 'test', 'integration_test', 'assets'])
-    for (const f of walk(path.join(TEMPLATE, dir))) put(at(dir, f), fix(read(path.join(TEMPLATE, dir, f))))
+    for (const f of walk(path.join(TEMPLATE, dir)).filter((f) => premium || !f.startsWith(PREMIUM))) put(at(dir, f), fix(read(path.join(TEMPLATE, dir, f))))
 
   // pubspec: dependencies (with the reason, flutter-app L11), integration_test, the asset
-  patch('pubspec.yaml', (s) => DEPS.every(([n]) => new RegExp(`^  ${n}:`, 'm').test(s)),
-    (s) => s.replace(/^dependencies:\n  flutter:\n    sdk: flutter\n/m, (m) => m + DEPS.filter(([n]) => !new RegExp(`^  ${n}:`, 'm').test(s)).map(([n, v, why]) => `  ${n}: ${v} # ${why}\n`).join('')),
+  patch('pubspec.yaml', (s) => deps.every(([n]) => new RegExp(`^  ${n}:`, 'm').test(s)),
+    (s) => s.replace(/^dependencies:\n  flutter:\n    sdk: flutter\n/m, (m) => m + deps.filter(([n]) => !new RegExp(`^  ${n}:`, 'm').test(s)).map(([n, v, why]) => `  ${n}: ${v} # ${why}\n`).join('')),
     'add the ads packages')
   patch('pubspec.yaml', (s) => /^  integration_test:/m.test(s),
     (s) => s.replace(/^dev_dependencies:\n/m, (m) => `${m}  integration_test: # device ad tests (integration_test/ads_device_test.dart)\n    sdk: flutter\n`),
@@ -161,7 +172,7 @@ function templateFiles(root) {
   const { mainPath, fix } = ids(root)
   const m = new Map()
   for (const dir of ['lib', 'test', 'integration_test', 'assets'])
-    for (const f of walk(path.join(TEMPLATE, dir))) m.set(`${dir}/${f}`, fix(read(path.join(TEMPLATE, dir, f))))
+    for (const f of walk(path.join(TEMPLATE, dir)).filter((f) => hasPremium(root) || !f.startsWith(PREMIUM))) m.set(`${dir}/${f}`, fix(read(path.join(TEMPLATE, dir, f))))
   if (mainPath) for (const f of ['NativeAdStyle.kt', 'SmallNativeAdFactory.kt'])
     m.set(path.relative(root, path.join(path.dirname(mainPath), f)), fix(read(path.join(TEMPLATE, 'android', f))))
   m.set('android/app/src/main/res/layout/native_small.xml', read(path.join(TEMPLATE, 'android/native_small.xml')))
@@ -205,12 +216,12 @@ export function changes(root, base) {
   const generated = sorted.filter(([f]) => GENERATED.test(f))
 
   // the ads layer's public names, from the template itself
-  const api = [...new Set([...tpl].filter(([f]) => f.startsWith('lib/google_ads_material/'))
+  const api = [...new Set([...tpl].filter(([f]) => /^lib\/(google_ads_material|premium_core)\//.test(f))
     .flatMap(([, s]) => [...s.matchAll(/^(?:abstract )?(?:class|enum|mixin) ([A-Z]\w*)/gm)].map((m) => m[1])))]
   const uses = []
   const src = new Map() // the app's own lib/**/*.dart (not the template) → its lines
   const lib = path.join(root, 'lib')
-  if (fs.existsSync(lib)) for (const f of walk(lib).filter((f) => f.endsWith('.dart') && !f.startsWith('google_ads_material/')).sort()) {
+  if (fs.existsSync(lib)) for (const f of walk(lib).filter((f) => f.endsWith('.dart') && !/^(google_ads_material|premium_core)\//.test(f)).sort()) {
     src.set(`lib/${f}`, read(path.join(lib, f)).split('\n'))
     src.get(`lib/${f}`).forEach((l, i) => { if (new RegExp(`\\b(${api.join('|')})\\b`).test(l)) uses.push(`lib/${f}:${i + 1}: \`${l.trim()}\``) })
   }
@@ -322,9 +333,10 @@ export function changes(root, base) {
   const lockText = fs.existsSync(path.join(root, 'pubspec.lock')) ? read(path.join(root, 'pubspec.lock')) : null
   const wk = lockText && locked(lockText, 'webview_flutter_wkwebview')
   const older = (a, b) => { const [x, y] = [a, b].map((v) => v.split('.').map(Number)); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false }
-  check('P14', `The ads packages resolve to the versions the pattern was tested with (common_flow_demo's pubspec.lock): ${DEPS.map(([n, v]) => `${n} ${v}`).join(', ')}; webview_flutter_wkwebview below 3.27.1`,
+  const tested = depsFor(hasPremium(root))
+  check('P14', `The ads packages resolve to the versions the pattern was tested with (common_flow_demo's pubspec.lock): ${tested.map(([n, v]) => `${n} ${v}`).join(', ')}; webview_flutter_wkwebview below 3.27.1`,
     !lockText ? ['pubspec.lock missing: run flutter pub get'] : [
-      ...DEPS.filter(([n, v]) => locked(lockText, n) !== v).map(([n, v]) => `${n} ${locked(lockText, n) || 'is not in pubspec.lock'} (tested: ${v})`),
+      ...tested.filter(([n, v]) => locked(lockText, n) !== v).map(([n, v]) => `${n} ${locked(lockText, n) || 'is not in pubspec.lock'} (tested: ${v})`),
       ...(wk && !older(wk, '3.27.1') ? [`webview_flutter_wkwebview ${wk} (must be below 3.27.1, flutter-ads section 1)`] : [])])
   const has = (f, needle) => !fs.existsSync(path.join(root, f)) || read(path.join(root, f)).includes(needle)
   check('P15', 'The native settings the guide app has: AndroidManifest.xml INTERNET, AD_ID and the AdMob APPLICATION_ID; Info.plist GADApplicationIdentifier and NSUserTrackingUsageDescription', [
@@ -391,23 +403,23 @@ function fixture(w) {
 // The template is the guide app's ads code (flutter-ads: "a copy of the guide app"): byte for byte, except the defaults
 // JSON, which leaves out the guide app's own credit values (its RemoteValues, not part of the pattern).
 const DEMO = process.env.ADS_DEMO || '/Users/mach/testing/common_flow_demo'
-const DEMO_ONLY_KEYS = ['credit_pack_credit', 'free_credit', 'week_credit', 'year_credit']
+const DEMO_ONLY_KEYS = ['credit_pack_credit', 'free_credit', 'week_credit', 'year_credit', 'free_uses_quick_edit']
 function demoSelftest() {
   if (!fs.existsSync(DEMO)) return `template = common_flow_demo: not checked (${DEMO} is not on this machine)`
   const kt = walk(path.join(DEMO, 'android/app/src/main')).find((f) => /(^|\/)MainActivity\.kt$/.test(f))
   const pairs = [
-    ...['lib/google_ads_material', 'test/google_ads_material'].flatMap((d) => walk(path.join(TEMPLATE, d)).map((f) => [`${d}/${f}`, `${d}/${f}`])),
+    ...['lib/google_ads_material', 'test/google_ads_material', 'lib/premium_core', 'test/premium_core'].flatMap((d) => walk(path.join(TEMPLATE, d)).map((f) => [`${d}/${f}`, `${d}/${f}`])),
     ...walk(path.join(TEMPLATE, 'integration_test')).map((f) => [`integration_test/${f}`, `integration_test/${f}`]),
     ...['NativeAdStyle.kt', 'SmallNativeAdFactory.kt', 'MainActivity.kt'].map((f) => [`android/${f}`, path.join('android/app/src/main', path.dirname(kt), f)]),
     ['android/native_small.xml', 'android/app/src/main/res/layout/native_small.xml'],
     ['ios/AppDelegate.swift', 'ios/Runner/AppDelegate.swift'],
   ]
   for (const [t, d] of pairs) assert.equal(read(path.join(TEMPLATE, t)), read(path.join(DEMO, d)), `template ${t} = common_flow_demo ${d}`)
-  for (const d of ['lib/google_ads_material', 'test/google_ads_material'])
+  for (const d of ['lib/google_ads_material', 'test/google_ads_material', 'lib/premium_core', 'test/premium_core'])
     assert.deepEqual(walk(path.join(DEMO, d)).sort(), walk(path.join(TEMPLATE, d)).sort(), `${d}: same files in common_flow_demo and the template`)
   const demo = JSON.parse(read(path.join(DEMO, 'assets/remote_config_default.json')))
   for (const k of DEMO_ONLY_KEYS) delete demo[k]
-  assert.deepEqual(JSON.parse(read(path.join(TEMPLATE, 'assets/remote_config_default.json'))), demo, 'defaults JSON = common_flow_demo\'s without its credit keys')
+  assert.deepEqual(JSON.parse(read(path.join(TEMPLATE, 'assets/remote_config_default.json'))), demo, 'defaults JSON = common_flow_demo\'s without its demo-only keys (credits, its Quick Edit free uses)')
   const lock = read(path.join(DEMO, 'pubspec.lock'))
   for (const [n, v] of DEPS) assert.equal(locked(lock, n), v, `${n}: the installer pins the version common_flow_demo's pubspec.lock has`)
   assert.equal(read(path.join(DEMO, 'ios/Runner/Info.plist')).match(/<key>NSUserTrackingUsageDescription<\/key>\s*<string>([^<]*)</)[1], ATT_TEXT)
@@ -562,7 +574,10 @@ function selftest() {
   assert.match(pub, /^dependency_overrides:\n  # .*\n  webview_flutter_wkwebview: ">=3\.23\.0 <3\.27\.1"\n/m)
   assert.doesNotMatch(pub.split('dependency_overrides:')[0], /webview_flutter_wkwebview/, 'not a dependency: deps would call it unused')
   assert.match(pub, /^flutter:\n  assets:\n    - assets\/remote_config_default\.json\n  uses-material-design: true/m)
-  assert.deepEqual(Object.keys(JSON.parse(r('assets/remote_config_default.json'))).filter((k) => /credit/.test(k)), [], 'no demo credit keys')
+  assert.deepEqual(Object.keys(JSON.parse(r('assets/remote_config_default.json'))).filter((k) => /credit|quick_edit/.test(k)), [], 'no demo-only keys')
+  const prem = walk(path.join(TEMPLATE, 'lib/premium_core'))
+  assert.ok(prem.length === 3 && prem.every((f) => fs.existsSync(path.join(root, 'lib/premium_core', f))), 'the Premium layer is installed by default')
+  assert.match(r('test/premium_core/premium_rules_test.dart'), /package:my_app\/premium_core\/free_use_gate\.dart/)
 
   // second run: nothing added twice, nothing overwritten
   const snapshot = walk(root).map((f) => [f, r(f)])
@@ -578,6 +593,15 @@ function selftest() {
   assert.match(third.todo[0], /MainActivity\.kt is not Flutter's default/)
   assert.match(third.todo[1], /AppDelegate\.swift is not Flutter's default/)
   fs.rmSync(root, { recursive: true, force: true })
+
+  // an app with no paid tier: no Premium layer, no purchase or preferences package, and changes() does not miss them
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-install-'))
+  fixture((f, s) => { fs.mkdirSync(path.dirname(path.join(bare, f)), { recursive: true }); fs.writeFileSync(path.join(bare, f), s) })
+  assert.deepEqual(install(bare, { premium: false }).todo, [])
+  assert.ok(!fs.existsSync(path.join(bare, 'lib/premium_core')) && !fs.existsSync(path.join(bare, 'test/premium_core')))
+  assert.doesNotMatch(read(path.join(bare, 'pubspec.yaml')), /^  (purchases_flutter|shared_preferences):/m)
+  assert.ok(![...templateFiles(bare).keys()].some((f) => f.includes('premium_core')), 'P1 does not expect the Premium files')
+  fs.rmSync(bare, { recursive: true, force: true })
   return 'selftest ok'
 }
 
@@ -590,9 +614,9 @@ else if (argv[0] === 'changes' && (argv.length === 3 || argv.length === 4)) {
   console.log(`${out}\n${r.split('\n').filter((l) => l.startsWith('- ') && !l.startsWith('- `')).slice(0, 6).join('\n')}`)
   const fails = r.split('\n').filter((l) => l.startsWith('- **FAIL**'))
   if (fails.length) { console.error(`\n${fails.join('\n')}\n(evidence under each in ${REPORT})`); process.exit(1) }
-} else if (argv.length === 1 && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { done, todo } = install(path.resolve(argv[0]))
+} else if ((argv.length === 1 || (argv.length === 2 && argv[1] === '--no-premium')) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { done, todo } = install(path.resolve(argv[0]), { premium: argv[1] !== '--no-premium' })
   console.log(done.join('\n'))
   if (todo.length) { console.error(`\nNOT DONE — add these, then run again:\n- ${todo.join('\n- ')}`); process.exit(1) }
   console.log('\nads pattern installed. Next: flutter pub get; wire it as skills/flutter-ads/SKILL.md section 3 says.')
-} else if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) { console.error('usage: ads-install.mjs <project> | changes <project> <base commit> [<out file>] | selftest'); process.exit(2) }
+} else if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) { console.error('usage: ads-install.mjs <project> [--no-premium] | changes <project> <base commit> [<out file>] | selftest'); process.exit(2) }

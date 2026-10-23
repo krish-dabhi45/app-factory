@@ -34,5 +34,9 @@
   "btnRadius": "12",
   "btnTextColor": "FFFFFF",
   "headerTextColor": "111827",
-  "bodyTextColor": "6B7280"
+  "bodyTextColor": "6B7280",
+  "show_intro": "1",
+  "show_share_app": "1",
+  "show_rate_app": "1",
+  "paywall_plans": ""
 }

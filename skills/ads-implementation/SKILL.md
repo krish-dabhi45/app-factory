@@ -44,10 +44,10 @@ Write the table: screen | ad | trigger / position | Remote Config keys | code | 
 ## 4. Install
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" "$(pwd)" && "<flutter>" pub get
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" "$(pwd)" --no-premium && "<flutter>" pub get
 ```
 
-If it prints `NOT DONE`, add exactly the lines it prints and run it again.
+If it prints `NOT DONE`, add exactly the lines it prints and run it again. `--no-premium`: an existing app keeps its own purchase code (step 5), so the installer adds no second store setup (`lib/premium_core/` is for apps `/app-factory:build-app` makes).
 
 ## 5. Wire
 

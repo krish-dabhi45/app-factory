@@ -23,8 +23,8 @@ const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '
 // Google's sample App IDs (developers.google.com/admob/{android,ios}/quick-start): debug builds work; the owner replaces them
 const SAMPLE_APP_ID = { android: 'ca-app-pub-3940256099942544~3347511713', ios: 'ca-app-pub-3940256099942544~1458002511' }
 // The exact versions the pattern was tested with = common_flow_demo's pubspec.lock (demoSelftest keeps them equal). Not
-// ^ranges: a range resolves the newest release, and google_mobile_ads 9.2.0 moved Android to UMP 4.0.0 and newer Mobile
-// Ads SDKs (Android 25.5.0, iOS 13.11) — never tested with this pattern (an app found on 9.2.0, 2026-10-23).
+// ^ranges: a range resolves the newest release, which the pattern was never tested with — an app found 2026-10-23 had
+// google_mobile_ads 9.2.0 (Mobile Ads SDK Android 25.4.0 → 25.5.0, iOS 13.7 → 13.11; UMP Android 4.0.0 in both).
 const DEPS = [
   ['google_mobile_ads', '9.1.0', 'ads (google_ads_material/)'],
   ['firebase_core', '5.0.0', 'Remote Config + ad_impression (google_ads_material/)'],
@@ -42,7 +42,7 @@ const hasPremium = (root) => fs.existsSync(path.join(root, 'lib', PREMIUM))
 const depsFor = (premium) => DEPS.filter(([n]) => premium || !PREMIUM_DEPS.has(n))
 // The guide app's Info.plist text (common_flow_demo ios/Runner/Info.plist), shown if the app asks for tracking permission
 const ATT_TEXT = 'This identifier will be used to deliver personalized ads to you.'
-// google_mobile_ads 9.1.0's Package.swift says iOS 13; webview_flutter_wkwebview 3.27.1+ says iOS 15 → Swift Package Manager
+// google_mobile_ads 9.1.0's Package.swift says iOS 13; webview_flutter_wkwebview 3.27.1 says iOS 15 (3.27.2 says 13 again) → Swift Package Manager
 // refuses the pair. An override, not a dependency: no Dart file imports it, and `pipeline.mjs deps` (which the gate and the
 // optimise step run) fails on — and removes — an unimported dependency.
 const PIN = 'dependency_overrides:\n  # iOS (Swift Package Manager): google_mobile_ads 9.1.0 declares iOS 13, webview_flutter_wkwebview 3.27.1+ iOS 15.\n  webview_flutter_wkwebview: ">=3.23.0 <3.27.1"\n'

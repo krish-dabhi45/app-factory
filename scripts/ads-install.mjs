@@ -23,10 +23,11 @@ const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '
 // Google's sample App IDs (developers.google.com/admob/{android,ios}/quick-start): debug builds work; the owner replaces them
 const SAMPLE_APP_ID = { android: 'ca-app-pub-3940256099942544~3347511713', ios: 'ca-app-pub-3940256099942544~1458002511' }
 // The exact versions the pattern was tested with = common_flow_demo's pubspec.lock (demoSelftest keeps them equal). Not
-// ^ranges: a range resolves the newest release, which the pattern was never tested with — an app found 2026-10-23 had
-// google_mobile_ads 9.2.0 (Mobile Ads SDK Android 25.4.0 → 25.5.0, iOS 13.7 → 13.11; UMP Android 4.0.0 in both).
+// ^ranges: a range resolves the newest release, which nobody has tested with this pattern yet. 2026-10-23: moved to
+// google_mobile_ads 9.2.0 (Mobile Ads SDK Android 25.5.0, iOS 13.11; UMP Android 4.0.0, as 9.1.0) after the guide app and a
+// fresh app passed their device tests on it, Android emulator and iOS simulator.
 const DEPS = [
-  ['google_mobile_ads', '9.1.0', 'ads (google_ads_material/)'],
+  ['google_mobile_ads', '9.2.0', 'ads (google_ads_material/)'],
   ['firebase_core', '5.0.0', 'Remote Config + ad_impression (google_ads_material/)'],
   ['firebase_remote_config', '7.0.0', 'ads/flow values from one JSON key (google_ads_material/remote_config.dart)'],
   ['firebase_analytics', '13.0.0', 'ad revenue event ad_impression (google_ads_material/ad_impression.dart)'],
@@ -42,10 +43,12 @@ const hasPremium = (root) => fs.existsSync(path.join(root, 'lib', PREMIUM))
 const depsFor = (premium) => DEPS.filter(([n]) => premium || !PREMIUM_DEPS.has(n))
 // The guide app's Info.plist text (common_flow_demo ios/Runner/Info.plist), shown if the app asks for tracking permission
 const ATT_TEXT = 'This identifier will be used to deliver personalized ads to you.'
-// google_mobile_ads 9.1.0's Package.swift says iOS 13; webview_flutter_wkwebview 3.27.1 says iOS 15 (3.27.2 says 13 again) → Swift Package Manager
-// refuses the pair. An override, not a dependency: no Dart file imports it, and `pipeline.mjs deps` (which the gate and the
+// google_mobile_ads' Package.swift says iOS 13; webview_flutter_wkwebview 3.27.1 said iOS 15 → Swift Package Manager refused the
+// pair; 3.27.2 says 13 again. Pinned to the tested version (demoSelftest: = the guide app's lock and override text, so a
+// later 3.27.x/3.28 that raises it again is never picked up by itself). An override, not a dependency: no Dart file imports it, and `pipeline.mjs deps` (which the gate and the
 // optimise step run) fails on — and removes — an unimported dependency.
-const PIN = 'dependency_overrides:\n  # iOS (Swift Package Manager): google_mobile_ads 9.1.0 declares iOS 13, webview_flutter_wkwebview 3.27.1+ iOS 15.\n  webview_flutter_wkwebview: ">=3.23.0 <3.27.1"\n'
+const WKWEBVIEW = '3.27.2'
+const PIN = `dependency_overrides:\n  # iOS (Swift Package Manager): webview_flutter_wkwebview 3.27.1 declared iOS 15 (google_mobile_ads declares 13); 3.27.2 is 13 again. The tested version.\n  webview_flutter_wkwebview: ${WKWEBVIEW}\n`
 
 // the version pubspec.lock resolved for a package (undefined when it is not there)
 const locked = (lock, n) => (lock.match(new RegExp(`^  ${n}:\\n(?: {4}.*\\n)*? {4}version: "([^"]+)"`, 'm')) || [])[1]
@@ -94,7 +97,7 @@ export function install(root, { premium = true } = {}) {
     'add integration_test')
   patch('pubspec.yaml', (s) => /^  webview_flutter_wkwebview:/m.test(s),
     (s) => /^dependency_overrides:\n/m.test(s) ? s.replace(/^dependency_overrides:\n/m, PIN) : `${s.trimEnd()}\n\n${PIN}`,
-    'pin webview_flutter_wkwebview <3.27.1 (iOS build)')
+    `pin webview_flutter_wkwebview ${WKWEBVIEW} (iOS build)`)
   patch('pubspec.yaml', (s) => /^\s+- assets\/remote_config_default\.json/m.test(s),
     (s) => /^  assets:\n/m.test(s) ? s.replace(/^  assets:\n/m, (m) => `${m}    - assets/remote_config_default.json\n`)
       : s.replace(/^flutter:\n/m, (m) => `${m}  assets:\n    - assets/remote_config_default.json\n`),
@@ -129,7 +132,7 @@ export function install(root, { premium = true } = {}) {
       : `${s.trimEnd()}\n\ndependencies {\n    implementation("com.facebook.android:facebook-core:18.0.0") // Facebook init (MainActivity)\n}\n`,
     'facebook-core dependency')
   patch(gradle, (s) => !/minSdk\s*=\s*(\d+)/.test(s) || +s.match(/minSdk\s*=\s*(\d+)/)[1] >= 24,
-    (s) => s.replace(/minSdk\s*=\s*\d+/, 'minSdk = 24 // google_mobile_ads 9.1.0'), 'minSdk 24')
+    (s) => s.replace(/minSdk\s*=\s*\d+/, 'minSdk = 24 // google_mobile_ads'), 'minSdk 24')
 
   // iOS: native factory in AppDelegate.swift (no Xcode project edit), App ID, iOS 15
   const del = 'ios/Runner/AppDelegate.swift'
@@ -332,12 +335,11 @@ export function changes(root, base) {
     [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && /(activeSubscriptions|allPurchasedProductIdentifiers|productIdentifier|productId|productID)\b[^;]*\.contains\(/.test(l) ? [`${f}:${i + 1} \`${l.trim()}\``] : [])))
   const lockText = fs.existsSync(path.join(root, 'pubspec.lock')) ? read(path.join(root, 'pubspec.lock')) : null
   const wk = lockText && locked(lockText, 'webview_flutter_wkwebview')
-  const older = (a, b) => { const [x, y] = [a, b].map((v) => v.split('.').map(Number)); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false }
   const tested = depsFor(hasPremium(root))
-  check('P14', `The ads packages resolve to the versions the pattern was tested with (common_flow_demo's pubspec.lock): ${tested.map(([n, v]) => `${n} ${v}`).join(', ')}; webview_flutter_wkwebview below 3.27.1`,
+  check('P14', `The ads packages resolve to the versions the pattern was tested with (common_flow_demo's pubspec.lock): ${tested.map(([n, v]) => `${n} ${v}`).join(', ')}, webview_flutter_wkwebview ${WKWEBVIEW}`,
     !lockText ? ['pubspec.lock missing: run flutter pub get'] : [
       ...tested.filter(([n, v]) => locked(lockText, n) !== v).map(([n, v]) => `${n} ${locked(lockText, n) || 'is not in pubspec.lock'} (tested: ${v})`),
-      ...(wk && !older(wk, '3.27.1') ? [`webview_flutter_wkwebview ${wk} (must be below 3.27.1, flutter-ads section 1)`] : [])])
+      ...(wk && wk !== WKWEBVIEW ? [`webview_flutter_wkwebview ${wk} (tested: ${WKWEBVIEW}, flutter-ads section 1)`] : [])])
   const has = (f, needle) => !fs.existsSync(path.join(root, f)) || read(path.join(root, f)).includes(needle)
   check('P15', 'The native settings the guide app has: AndroidManifest.xml INTERNET, AD_ID and the AdMob APPLICATION_ID; Info.plist GADApplicationIdentifier and NSUserTrackingUsageDescription', [
     ...['android.permission.INTERNET', 'com.google.android.gms.permission.AD_ID', 'com.google.android.gms.ads.APPLICATION_ID'].filter((k) => !has('android/app/src/main/AndroidManifest.xml', k)).map((k) => `AndroidManifest.xml has no ${k}`),
@@ -422,8 +424,10 @@ function demoSelftest() {
   assert.deepEqual(JSON.parse(read(path.join(TEMPLATE, 'assets/remote_config_default.json'))), demo, 'defaults JSON = common_flow_demo\'s without its demo-only keys (credits, its Quick Edit free uses)')
   const lock = read(path.join(DEMO, 'pubspec.lock'))
   for (const [n, v] of DEPS) assert.equal(locked(lock, n), v, `${n}: the installer pins the version common_flow_demo's pubspec.lock has`)
+  assert.equal(locked(lock, 'webview_flutter_wkwebview'), WKWEBVIEW, 'webview_flutter_wkwebview: the version common_flow_demo resolves')
+  assert.ok(read(path.join(DEMO, 'pubspec.yaml')).includes(PIN.replace('dependency_overrides:\n', '')), 'the override (comment + version) is common_flow_demo\'s')
   assert.equal(read(path.join(DEMO, 'ios/Runner/Info.plist')).match(/<key>NSUserTrackingUsageDescription<\/key>\s*<string>([^<]*)</)[1], ATT_TEXT)
-  return `template = common_flow_demo (${pairs.length + 1} files, ${DEPS.length} package versions, the tracking text compared)`
+  return `template = common_flow_demo (${pairs.length + 1} files, ${DEPS.length + 1} package versions, the override, the tracking text compared)`
 }
 
 function changesSelftest() {
@@ -442,11 +446,11 @@ function changesSelftest() {
     return out.map((e) => JSON.stringify(e)).join('\n') + '\n'
   }
   // pubspec.lock as `flutter pub get` writes it, for the ads packages
-  const lockOf = (over = {}) => 'packages:\n' + Object.entries({ ...Object.fromEntries(DEPS.map(([n, v]) => [n, v])), webview_flutter_wkwebview: '3.27.0', ...over })
+  const lockOf = (over = {}) => 'packages:\n' + Object.entries({ ...Object.fromEntries(DEPS.map(([n, v]) => [n, v])), webview_flutter_wkwebview: WKWEBVIEW, ...over })
     .map(([n, v]) => `  ${n}:\n    dependency: "direct main"\n    description:\n      name: ${n}\n      sha256: "00"\n      url: "https://pub.dev"\n    source: hosted\n    version: "${v}"\n`).join('')
   fixture(w)
-  // like the app the 2026-10-23 audit found: it already had google_mobile_ads, at a newer range than the tested version
-  w('pubspec.yaml', r_('pubspec.yaml').replace('  cupertino_icons: ^1.0.8\n', '  cupertino_icons: ^1.0.8\n  google_mobile_ads: ^9.2.0\n'))
+  // an app that already had google_mobile_ads at another version than the tested one
+  w('pubspec.yaml', r_('pubspec.yaml').replace('  cupertino_icons: ^1.0.8\n', '  cupertino_icons: ^1.0.8\n  google_mobile_ads: ^9.1.0\n'))
   w('.gitignore', '.dart_tool/\n')
   w('lib/main.dart', "import 'package:flutter/material.dart';\n\nvoid main() => runApp(const MaterialApp(home: Text('home')));\n")
   w('lib/data/picker.dart', "import 'package:image_picker/image_picker.dart';\n\nclass Picker {\n  Future<void> pick() async {\n    await ImagePicker().pickImage(source: ImageSource.gallery);\n  }\n}\n")
@@ -459,7 +463,7 @@ function changesSelftest() {
   assert.deepEqual(install(root).todo, [])
   // the wiring, as flutter-ads sections 2–3 say: startup steps in order, HUD key, banner, home rule, resume ad; the
   // backend gains only an allowed import and skipNextResume(); a test; one allowed addition to an installed file
-  w('pubspec.yaml', r_('pubspec.yaml').replace('google_mobile_ads: ^9.2.0', 'google_mobile_ads: 9.1.0 # ads (google_ads_material/)'))
+  w('pubspec.yaml', r_('pubspec.yaml').replace('google_mobile_ads: ^9.1.0', 'google_mobile_ads: 9.2.0 # ads (google_ads_material/)'))
   w('lib/main.dart', "import 'package:flutter/material.dart';\nimport 'package:my_app/google_ads_material/banner_ad_widget.dart';\n\nFuture<void> main() async {\n  await RemoteConfigLoader.load('my_app_v1');\n  if (RemoteConfigState.firebaseReady) {\n    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;\n    PlatformDispatcher.instance.onError = (error, stack) {\n      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);\n      return true;\n    };\n  }\n  await FacebookInit.init();\n  await SplashAds.run(isFirstTime: false);\n  SplashAds.afterSplash();\n  runApp(MaterialApp(navigatorKey: AppHud.navigatorKey, home: Column(children: [Text('home'), BannerAdWidget()])));\n  AppResumeAdListener.enabled = true;\n  AdTapHelper.onHomeTap(() {});\n}\n")
   w('lib/data/picker.dart', "import 'package:image_picker/image_picker.dart';\nimport '../google_ads_material/app_open_ad_manager.dart';\n\nclass Picker {\n  Future<void> pick() async {\n    AppResumeAdListener.skipNextResume(); // no app open ad on the way back\n    await ImagePicker().pickImage(source: ImageSource.gallery);\n  }\n}\n")
   w('test/ads_wiring_test.dart', "void main() {\n  testWidgets('AC47 home shows the banner', (t) async {});\n  test('AC48 another user\\'s profile', () {});\n}\n")
@@ -487,7 +491,7 @@ function changesSelftest() {
   assert.doesNotMatch(r, /### `lib\/google_ads_material\/banner_ad_widget\.dart`/, 'an identical template file is listed, not printed')
   // the checks, on an app wired as the pattern says
   assert.match(r, /- Checks: 19 passed, 0 failed\n/)
-  assert.match(r, /\*\*PASS\*\* I5 /, 'google_mobile_ads ^9.2.0 → 9.1.0 is the pattern, not a broken package')
+  assert.match(r, /\*\*PASS\*\* I5 /, 'google_mobile_ads ^9.1.0 → 9.2.0 is the pattern, not a broken package')
   assert.doesNotMatch(r, /\*\*FAIL\*\*/)
   assert.match(r, /\*\*PASS\*\* I3 .* \(1 passed before; 2 of 3 pass now\)\n  - 1 failed or were skipped already before the ads work\n/)
   assert.match(r, /\*\*PASS\*\* P2 .*\n  - lib\/main\.dart:5, 13, 14, 15\n/)
@@ -510,7 +514,7 @@ function changesSelftest() {
   w('lib/google_ads_material/ads_id.dart', r_('lib/google_ads_material/ads_id.dart').replace(/^.*useTestIds.*\n/m, ''))
   w('assets/remote_config_default.json', r_('assets/remote_config_default.json').replace('"splash_ad_wait_seconds": "8"', '"splash_ad_wait_seconds": "3"'))
   fs.rmSync(path.join(root, 'lib/google_ads_material/app_hud.dart'))
-  w('pubspec.lock', lockOf({ google_mobile_ads: '9.2.0', webview_flutter_wkwebview: '3.27.1' }))
+  w('pubspec.lock', lockOf({ google_mobile_ads: '9.1.0', webview_flutter_wkwebview: '3.27.1' }))
   w('ios/Runner/Info.plist', r_('ios/Runner/Info.plist').replace(/\t<key>NSUserTrackingUsageDescription<\/key>\n\t<string>[^<]*<\/string>\n/, ''))
   w('lib/ui/crash.dart', "void setUp() {\n  FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;\n}\n")
   w('lib/ui/old_ads.dart', "final rc = FirebaseRemoteConfig.instance;\nFuture<void> other() => RemoteConfigLoader.load('other_v1');\n")
@@ -535,7 +539,7 @@ function changesSelftest() {
     /\*\*FAIL\*\* P11 .*\n  - RemoteConfigLoader\.load keys: '(my_app_v1', 'other_v1|other_v1', 'my_app_v1)' \(expected only 'my_app_v1'\)\n  - lib\/ui\/old_ads\.dart:1 `final rc = FirebaseRemoteConfig\.instance;`\n/,
     /\*\*FAIL\*\* P12 .*\n  - lib\/main\.dart:4 `if \(!await checkConnectivity\(\)\) return;` comes before the startup at line 6\n/,
     /\*\*FAIL\*\* P13 .*\n  - lib\/ui\/premium\.dart:4 `bool premium\(info\) => info\.activeSubscriptions\.toString\(\)\.contains\('week'\);`\n/,
-    /\*\*FAIL\*\* P14 .*\n  - google_mobile_ads 9\.2\.0 \(tested: 9\.1\.0\)\n  - webview_flutter_wkwebview 3\.27\.1 \(must be below 3\.27\.1, flutter-ads section 1\)\n/,
+    /\*\*FAIL\*\* P14 .*\n  - google_mobile_ads 9\.1\.0 \(tested: 9\.2\.0\)\n  - webview_flutter_wkwebview 3\.27\.1 \(tested: 3\.27\.2, flutter-ads section 1\)\n/,
     /\*\*FAIL\*\* P15 .*\n  - Info\.plist has no NSUserTrackingUsageDescription\n/,
     /\*\*FAIL\*\* P3 .*\n  - not found in the app's own lib\/\n/,
     /\*\*FAIL\*\* P6 .*\n  - lib\/ui\/share\.dart:2 `Share\.share` has no skipNextResume\(\) before it\n/,
@@ -571,7 +575,7 @@ function selftest() {
   for (const [n] of DEPS) assert.match(pub, new RegExp(`^  ${n}: .+ # `, 'm'), `${n} with its reason`)
   for (const [n, v] of DEPS) assert.match(pub, new RegExp(`^  ${n}: ${v.replaceAll('.', '\\.')} # `, 'm'), `${n} pinned to the tested ${v}`)
   assert.match(pub, /^dev_dependencies:\n  integration_test: .*\n    sdk: flutter\n/m)
-  assert.match(pub, /^dependency_overrides:\n  # .*\n  webview_flutter_wkwebview: ">=3\.23\.0 <3\.27\.1"\n/m)
+  assert.match(pub, /^dependency_overrides:\n  # .*\n  webview_flutter_wkwebview: 3\.27\.2\n/m)
   assert.doesNotMatch(pub.split('dependency_overrides:')[0], /webview_flutter_wkwebview/, 'not a dependency: deps would call it unused')
   assert.match(pub, /^flutter:\n  assets:\n    - assets\/remote_config_default\.json\n  uses-material-design: true/m)
   assert.deepEqual(Object.keys(JSON.parse(r('assets/remote_config_default.json'))).filter((k) => /credit|quick_edit/.test(k)), [], 'no demo-only keys')

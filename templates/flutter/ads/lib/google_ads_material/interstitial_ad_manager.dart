@@ -8,19 +8,18 @@ import 'ad_impression.dart';
 import 'app_hud.dart';
 import 'ads_id.dart';
 
-/// Ek reusable interstitial loader: pehle HIGH id, fail ho to NORMAL id.
+/// Ek reusable interstitial loader, Remote Config key [key] (jaise "interPreLoad") ki id se.
 /// Close hote hi apne aap next ad preload karta hai.
 class InterstitialSlot {
-  InterstitialSlot({required this.highId, required this.normalId});
+  InterstitialSlot(this.key);
 
-  final String Function() highId;
-  final String Function() normalId;
+  final String key;
 
   InterstitialAd? _ad;
   bool _loading = false;
 
-  /// Dono ids "11" -> ye ad off: na load, na show.
-  bool get isOff => AdsId.isOff(highId()) && AdsId.isOff(normalId());
+  /// Id "11" -> ye ad off: na load, na show.
+  bool get isOff => AdsId.isOff(AdsId.unit(key));
 
   bool get isReady => !isOff && _ad != null;
 
@@ -28,7 +27,7 @@ class InterstitialSlot {
     if (AdFlags.isPremium || isOff || !AdFlags.adsReady) return false;
     if (_ad != null || _loading) return _ad != null;
     _loading = true;
-    _ad = await _load(highId()) ?? await _load(normalId());
+    _ad = await _load(AdsId.unit(key));
     _loading = false;
     return _ad != null;
   }
@@ -42,7 +41,7 @@ class InterstitialSlot {
       adLoadCallback: InterstitialAdLoadCallback(
         onAdLoaded: (ad) {
           debugPrint('Interstitial loaded ($id)');
-          AdImpression.attach(ad, 'interstitial');
+          AdImpression.attach(ad, key);
           c.complete(ad);
         },
         onAdFailedToLoad: (e) {
@@ -107,13 +106,8 @@ class InterstitialSlot {
 class InterstitialAdManager {
   InterstitialAdManager._();
 
-  static final splash = InterstitialSlot(
-    highId: () => AdsId.splashInterstitialHigh,
-    normalId: () => AdsId.splashInterstitialNormal,
-  );
+  static final splash = InterstitialSlot('interSplash');
 
-  static final main = InterstitialSlot(
-    highId: () => AdsId.interstitialHigh,
-    normalId: () => AdsId.interstitialNormal,
-  );
+  /// Home / tab taps (AdTapHelper.onHomeTap).
+  static final main = InterstitialSlot('interPreLoad');
 }

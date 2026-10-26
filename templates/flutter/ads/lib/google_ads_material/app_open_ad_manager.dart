@@ -7,19 +7,18 @@ import 'ad_flags.dart';
 import 'ad_impression.dart';
 import 'ads_id.dart';
 
-/// App open ad: HIGH -> NORMAL fallback, close ke baad preload.
+/// App open ad, Remote Config key [key] (jaise "appOpenAds") ki id se. Close ke baad preload.
 class AppOpenSlot {
-  AppOpenSlot({required this.highId, required this.normalId});
+  AppOpenSlot(this.key);
 
-  final String Function() highId;
-  final String Function() normalId;
+  final String key;
 
   AppOpenAd? _ad;
   DateTime? _loadedAt;
   bool _loading = false;
 
-  /// Dono ids "11" -> ye ad off: na load, na show.
-  bool get isOff => AdsId.isOff(highId()) && AdsId.isOff(normalId());
+  /// Id "11" -> ye ad off: na load, na show.
+  bool get isOff => AdsId.isOff(AdsId.unit(key));
 
   /// AdMob app open ad 4 ghante baad expire hota hai.
   bool get isReady =>
@@ -31,7 +30,7 @@ class AppOpenSlot {
     if (isReady || _loading) return isReady;
     _loading = true;
     _ad?.dispose();
-    _ad = await _load(highId()) ?? await _load(normalId());
+    _ad = await _load(AdsId.unit(key));
     _loadedAt = _ad == null ? null : DateTime.now();
     _loading = false;
     return _ad != null;
@@ -45,7 +44,7 @@ class AppOpenSlot {
       request: const AdRequest(),
       adLoadCallback: AppOpenAdLoadCallback(
         onAdLoaded: (ad) {
-          AdImpression.attach(ad, 'app_open');
+          AdImpression.attach(ad, key);
           c.complete(ad);
         },
         onAdFailedToLoad: (e) {
@@ -91,8 +90,10 @@ class AppOpenSlot {
 class AppOpenAdManager {
   AppOpenAdManager._();
 
-  static final splash = AppOpenSlot(highId: () => AdsId.splashAppOpenHigh, normalId: () => AdsId.splashAppOpenNormal);
-  static final resume = AppOpenSlot(highId: () => AdsId.appOpenHigh, normalId: () => AdsId.appOpenNormal);
+  static final splash = AppOpenSlot('appOpenSplash');
+
+  /// App background -> foreground (AppResumeAdListener).
+  static final resume = AppOpenSlot('appOpenAds');
 }
 
 /// App background -> foreground aane par app open ad.
@@ -121,7 +122,7 @@ class AppResumeAdListener {
     final skip = _skipUntil != null && DateTime.now().isBefore(_skipUntil!);
     _skipUntil = null;
     if (skip) return false;
-    return enabled && _blocked == 0 && AdsId.appOpenOnResume && !AdFlags.isPremium && !AdFlags.isFullScreenAdShowing;
+    return enabled && _blocked == 0 && !AdFlags.isPremium && !AdFlags.isFullScreenAdShowing;
   }
 
   @visibleForTesting
@@ -135,7 +136,11 @@ class AppResumeAdListener {
     if (_sub != null) return;
     AppStateEventNotifier.startListening();
     _sub = AppStateEventNotifier.appStateStream.listen((state) {
-      if (state != AppState.foreground) return;
+      // Background me jaate hi load (pichla load fail hua ho ya 4 ghante purana ho), IPTV jaisa.
+      if (state == AppState.background) {
+        AppOpenAdManager.resume.preload();
+        return;
+      }
       if (shouldShowOnForeground()) AppOpenAdManager.resume.show(onDone: () {});
     });
     AppOpenAdManager.resume.preload();

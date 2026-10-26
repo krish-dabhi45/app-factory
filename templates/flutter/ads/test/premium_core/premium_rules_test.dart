@@ -21,27 +21,33 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('paywall_plans parses known package types in order, once each', () {
-    expect(parsePlans('weekly, annual,lifetime'), [PackageType.weekly, PackageType.annual, PackageType.lifetime]);
-    expect(parsePlans('annual,anual,weekly,annual'), [PackageType.annual, PackageType.weekly]);
-    expect(parsePlans(''), isEmpty);
-    expect(parsePlans('unknown'), isEmpty);
+  test('show<Plan>Plan: IPTV names, false or "0" hides, missing shows', () {
+    expect(planKey(PackageType.annual), 'showYearlyPlan');
+    expect(planKey(PackageType.weekly), 'showWeeklyPlan');
+    expect(planKey(PackageType.sixMonth), 'showSixMonthPlan');
+    AdsId.setJson({'showWeeklyPlan': false, 'showYearlyPlan': true, 'showLifetimePlan': '0'});
+    expect([PackageType.weekly, PackageType.annual, PackageType.lifetime, PackageType.monthly].map(PremiumValues.showPlan),
+        [false, true, false, true]);
   });
 
-  test('free_uses_<feature> is a whole number >= 0, else no limit', () {
+  test('useCount is a whole number >= 0, else no limit; premiumShow "0" = no limit', () {
     expect(parseLimit('3'), 3);
     expect(parseLimit('0'), 0);
     expect(parseLimit(''), isNull);
     expect(parseLimit('-1'), isNull);
     expect(parseLimit('two'), isNull);
+    AdsId.setJson({'useCount': 3, 'premiumShow': '1'});
+    expect(PremiumValues.freeUses('export'), 3);
+    AdsId.setJson({'useCount': 3, 'premiumShow': '0'});
+    expect(PremiumValues.freeUses('export'), isNull);
   });
 
-  test('the paywall shows the switched-on plans in their order, never an empty list', () {
+  test('the paywall shows the switched-on plans in the offering\'s order, never an empty list', () {
     final week = _pkg('w', PackageType.weekly), year = _pkg('y', PackageType.annual), life = _pkg('l', PackageType.lifetime);
     final all = [week, year, life];
-    expect(visiblePlans(all, [PackageType.annual, PackageType.weekly]), [year, week]);
-    expect(visiblePlans(all, []), all);
-    expect(visiblePlans(all, [PackageType.monthly]), all, reason: 'a type the offering lacks must not empty the paywall');
+    expect(visiblePlans(all, (t) => t != PackageType.weekly), [year, life]);
+    expect(visiblePlans(all, (_) => true), all);
+    expect(visiblePlans(all, (_) => false), all, reason: 'everything hidden must not empty the paywall');
   });
 
   test('free use: allowed under the limit, paywall at it, always for Premium or no limit', () {
@@ -53,7 +59,7 @@ void main() {
   });
 
   test('FreeUseGate counts each free use and opens the paywall at the limit', () async {
-    AdsId.setJson({'free_uses_export': '2'});
+    AdsId.setJson({'useCount': 2, 'premiumShow': '1'});
     var runs = 0, paywalls = 0;
     Future<bool> use({bool buys = false}) => FreeUseGate.run('export', action: () async => runs++, openPaywall: () async {
           paywalls++;
@@ -71,7 +77,7 @@ void main() {
     expect(await FreeUseGate.used('export'), 2, reason: 'Premium uses are not counted');
   });
 
-  test('FreeUseGate never limits a feature with no free_uses key', () async {
+  test('FreeUseGate never limits when there is no useCount', () async {
     var runs = 0;
     for (var i = 0; i < 5; i++) {
       await FreeUseGate.run('share', action: () async => runs++, openPaywall: () async => fail('no paywall without a limit'));

@@ -14,7 +14,10 @@ class MainActivity : FlutterActivity() {
 
         // Native ad factories (Flutter NativeFactory ids se match)
         GoogleMobileAdsPlugin.registerNativeAdFactory(
-            flutterEngine, "smallNative", SmallNativeAdFactory(layoutInflater)
+            flutterEngine, "smallNative", LayoutNativeAdFactory(layoutInflater, R.layout.native_small)
+        )
+        GoogleMobileAdsPlugin.registerNativeAdFactory(
+            flutterEngine, "bigNative", LayoutNativeAdFactory(layoutInflater, R.layout.native_big)
         )
 
         // Facebook init: id + token Firebase Remote Config se (Flutter: FacebookInit.init())
@@ -49,6 +52,7 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         GoogleMobileAdsPlugin.unregisterNativeAdFactory(flutterEngine, "smallNative")
+        GoogleMobileAdsPlugin.unregisterNativeAdFactory(flutterEngine, "bigNative")
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

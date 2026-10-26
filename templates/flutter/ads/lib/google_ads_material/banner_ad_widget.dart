@@ -11,7 +11,7 @@ enum BannerType { adaptive, collapsible }
 /// Reusable banner. Screen ke bottom me `bottomNavigationBar` ya Column ke last me lagao.
 ///
 /// Rules:
-///  - Sirf home ke andar wali screens par, jisme TextField NA ho.
+///  - Home / tab se khuli screens aur list wale tab par; TextField, player, home tab, settings par nahi (flutter-ads section 2).
 ///  - SafeArea ke andar (bottom inset respect karta hai).
 ///  - Left / right padding 0.
 ///  - Load hone tak banner ki height ki jagah reserve (layout jump nahi), load fail ho to poori jagah hat jaati hai.
@@ -39,7 +39,8 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
 
   bool get _enabled => !AdFlags.isPremium && AdFlags.adsReady && !AdsId.isOff(_unitId);
 
-  String get _unitId => widget.type == BannerType.collapsible ? AdsId.bannerCollapsible : AdsId.bannerAdaptive;
+  String get _key => widget.type == BannerType.collapsible ? 'bannerCollapsible' : 'banner';
+  String get _unitId => AdsId.unit(_key);
 
   @override
   void didChangeDependencies() {
@@ -58,7 +59,7 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
       size: size,
       request: AdRequest(extras: collapsible ? const {'collapsible': 'bottom'} : null),
       listener: BannerAdListener(
-        onPaidEvent: AdImpression.listener(collapsible ? 'banner_collapsible' : 'banner'),
+        onPaidEvent: AdImpression.listener(_key),
         onAdLoaded: (_) => mounted ? setState(() => _loaded = true) : null,
         onAdClicked: (_) => AppResumeAdListener.skipNextResume(),
         onAdFailedToLoad: (ad, e) {

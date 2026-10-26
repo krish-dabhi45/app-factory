@@ -10,8 +10,9 @@ import android.widget.TextView
 /// Har native factory me `NativeAdStyle(customOptions, context)` use karo.
 class NativeAdStyle(private val options: Map<String, Any>?, private val view: View) {
 
+    /// "#RRGGBB", "RRGGBB" ya "AARRGGBB" (IPTV config "#" ke saath bhejta hai).
     private fun hex(key: String, def: String): Int {
-        val v = (options?.get(key) as? String)?.trim().orEmpty()
+        val v = (options?.get(key) as? String)?.trim()?.removePrefix("#").orEmpty()
         return try {
             Color.parseColor("#" + v.ifEmpty { def })
         } catch (e: Exception) {
@@ -28,14 +29,12 @@ class NativeAdStyle(private val options: Map<String, Any>?, private val view: Vi
     val header get() = hex("headerTextColor", "FFFFFF")
     val body get() = hex("bodyTextColor", "DDDDDD")
     val buttonText get() = hex("btnTextColor", "000000")
+    val badgeBackground get() = hex("btnAdBgColor", "FFB300")
+    val badgeText get() = hex("btnAdTextColor", "FFFFFF")
 
-    /// CTA button ka gradient: start -> (center optional) -> end, angle aur radius bhi online.
+    /// CTA button ka gradient: btnBgColor1 -> btnBgColor2 (dono same = solid), angle aur radius bhi online.
     fun buttonBackground(): GradientDrawable {
-        val start = hex("btnBgColor_start", "FFFFFF")
-        val end = hex("btnBgColor_end", "FFFFFF")
-        val centerRaw = str("btnBgColor_center", "")
-        val colors = if (centerRaw.isEmpty()) intArrayOf(start, end)
-        else intArrayOf(start, hex("btnBgColor_center", "FFFFFF"), end)
+        val colors = intArrayOf(hex("btnBgColor1", "FFFFFF"), hex("btnBgColor2", "FFFFFF"))
 
         val orientation = when (str("btnGradientAngle", "0").toIntOrNull() ?: 0) {
             45 -> GradientDrawable.Orientation.BL_TR
@@ -50,10 +49,12 @@ class NativeAdStyle(private val options: Map<String, Any>?, private val view: Vi
         }
     }
 
-    fun applyText(headline: TextView?, bodyView: TextView?, cta: TextView?) {
+    fun applyText(headline: TextView?, bodyView: TextView?, cta: TextView?, badge: TextView?) {
         headline?.setTextColor(header)
         bodyView?.setTextColor(body)
         cta?.setTextColor(buttonText)
         cta?.background = buttonBackground()
+        badge?.setTextColor(badgeText)
+        badge?.setBackgroundColor(badgeBackground)
     }
 }

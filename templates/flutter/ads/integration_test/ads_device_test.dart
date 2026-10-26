@@ -68,7 +68,7 @@ void main() {
     };
     addTearDown(() => debugPrint = print);
     AdsId.useTestIds = false;
-    AdsId.setJson({...defaults, 'banner_adaptive': 'ca-app-pub-0000000000000000/0000000000'});
+    AdsId.setJson({...defaults, 'banner': 'ca-app-pub-0000000000000000/0000000000'});
     await tester.pumpWidget(app(const SizedBox.expand(), bottom: const BannerAdWidget()));
     expect(await pumpUntil(tester, () => logs.any((l) => l.startsWith('Banner fail'))), isTrue, reason: 'load failed');
     await tester.pump(const Duration(seconds: 1));
@@ -76,9 +76,9 @@ void main() {
     expect(find.byType(AdWidget), findsNothing);
   });
 
-  testWidgets('small native (factory smallNative) loads with the Remote Config colours', (tester) async {
+  testWidgets('small native (factory smallNative, home) loads with the Remote Config colours', (tester) async {
     await tester.pumpWidget(app(
-      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.onboarding, height: 90)]),
+      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 90)]),
     ));
     expect(find.byType(SmallNativeShimmer), findsOneWidget, reason: 'shimmer while loading');
     expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
@@ -86,10 +86,20 @@ void main() {
     await tester.pump(const Duration(seconds: 2)); // native view drawn, visible in the device window
   });
 
+  testWidgets('big native (factory bigNative, intro) loads with its media view', (tester) async {
+    await tester.pumpWidget(app(
+      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 300)]),
+    ));
+    expect(find.byType(BigNativeShimmer), findsOneWidget, reason: 'shimmer while loading');
+    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 300);
+    await tester.pump(const Duration(seconds: 2));
+  });
+
   testWidgets('in-app interstitial: no preloaded ad and wait "0" -> goes on at once, HUD removed', (tester) async {
-    AdsId.setJson({...defaults, 'inapp_ad_wait_seconds': '0'});
+    AdsId.setJson({...defaults, 'inAppAdWaitSeconds': '0'});
     await tester.pumpWidget(app(const SizedBox.expand()));
-    final slot = InterstitialSlot(highId: () => AdsId.interstitialHigh, normalId: () => AdsId.interstitialNormal);
+    final slot = InterstitialSlot('interPreLoad');
     var done = 0;
     final watch = Stopwatch()..start();
     final shown = await slot.show(onDone: () => done++, preloadAfter: false);

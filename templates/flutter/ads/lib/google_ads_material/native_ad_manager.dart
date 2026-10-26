@@ -8,41 +8,41 @@ import 'ads_id.dart';
 import 'app_open_ad_manager.dart';
 
 /// Native factory ids. Native side me isi naam se register karna hai:
-/// Android MainActivity.kt (SmallNativeAdFactory.kt), iOS AppDelegate.swift (SmallNativeAdFactory).
+/// Android MainActivity.kt (LayoutNativeAdFactory.kt + native_small.xml / native_big.xml),
+/// iOS AppDelegate.swift (TemplateNativeAdFactory).
 class NativeFactory {
-  static const small = 'smallNative'; // onboarding bottom small native
-  static const medium = 'mediumNative'; // jarurat ke hisab se aur add karo
+  static const small = 'smallNative'; // icon | headline + body | CTA, height 90 (home)
+  static const big = 'bigNative'; // icon + headline + body, media 150, CTA full width, height 300 (intro)
 }
 
-/// Ek native slot: preload (HIGH -> NORMAL), aur jo widget le jaye usko de do.
+/// Ek native slot, Remote Config key [key] ki id se: preload, aur jo widget le jaye usko de do.
 class NativeSlot {
-  NativeSlot({required this.factoryId, required this.highId, required this.normalId});
+  NativeSlot(this.key, {required this.factoryId});
 
+  final String key;
   final String factoryId;
-  final String Function() highId;
-  final String Function() normalId;
 
   NativeAd? _ad;
   Future<NativeAd?>? _pending;
 
-  /// Dono ids "11" -> ye ad off: na load, na show.
-  bool get isOff => AdsId.isOff(highId()) && AdsId.isOff(normalId());
+  /// Id "11" (ya gate flag off) -> ye ad off: na load, na show.
+  bool get isOff => AdsId.isOff(AdsId.unit(key));
 
   bool get isReady => !isOff && _ad != null;
 
-  /// Splash me call karo taaki onboarding tak ad ready ho.
+  /// Splash me call karo taaki intro / home tak ad ready ho.
   Future<NativeAd?> preload() {
     if (AdFlags.isPremium || isOff || !AdFlags.adsReady) return Future.value(null);
     if (_ad != null) return Future.value(_ad);
     return _pending ??= () async {
-      final ad = await _load(highId()) ?? await _load(normalId());
+      final ad = await _load(AdsId.unit(key));
       _ad = ad;
       _pending = null;
       return ad;
     }();
   }
 
-  /// Ready ad le lo, ya load hone ka wait karo (onboarding me fallback load).
+  /// Ready ad le lo, ya load hone ka wait karo (preload na hua ho to yahi load).
   Future<NativeAd?> take() async {
     final ad = _ad ?? await preload();
     _ad = null; // ek NativeAd ek hi AdWidget me dikh sakta hai
@@ -58,7 +58,7 @@ class NativeSlot {
       request: const AdRequest(),
       customOptions: AdsId.nativeColors, // native design ke colors online se
       listener: NativeAdListener(
-        onPaidEvent: AdImpression.listener('native'),
+        onPaidEvent: AdImpression.listener(key),
         onAdClicked: (_) => AppResumeAdListener.skipNextResume(),
         onAdLoaded: (ad) => c.complete(ad as NativeAd),
         onAdFailedToLoad: (ad, e) {
@@ -75,9 +75,9 @@ class NativeSlot {
 class NativeAdManager {
   NativeAdManager._();
 
-  static final onboarding = NativeSlot(
-    factoryId: NativeFactory.small,
-    highId: () => AdsId.nativeOnboardingHigh,
-    normalId: () => AdsId.nativeOnboardingNormal,
-  );
+  /// Intro (first launch): sab pages ke neeche ek big native. Gate: adShowIntroFlag.
+  static final intro = NativeSlot('nativeIntroBig', factoryId: NativeFactory.big);
+
+  /// Home ke content me ek small native. Gate: adShowHomeFlag.
+  static final home = NativeSlot('nativeHome', factoryId: NativeFactory.small);
 }

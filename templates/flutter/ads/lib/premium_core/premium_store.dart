@@ -64,14 +64,14 @@ class PremiumStore extends ChangeNotifier {
     }
   }
 
-  /// The paywall's plans: the current offering, filtered and ordered by `paywall_plans`.
+  /// The paywall's plans: the current offering without the types `show<Plan>Plan` hides.
   Future<void> loadPlans() async {
     if (!configured) return;
     loadingPlans = true;
     notifyListeners();
     try {
       final all = (await Purchases.getOfferings()).current?.availablePackages ?? const <Package>[];
-      plans = visiblePlans(all, PremiumValues.paywallPlans);
+      plans = visiblePlans(all, PremiumValues.showPlan);
     } catch (e) {
       lastError = '$e';
       plans = const [];

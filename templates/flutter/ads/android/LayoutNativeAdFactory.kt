@@ -5,19 +5,23 @@ import android.view.View
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
+import com.google.android.gms.ads.nativead.MediaView
 import com.google.android.gms.ads.nativead.NativeAd
 import com.google.android.gms.ads.nativead.NativeAdView
 import io.flutter.plugins.googlemobileads.NativeAdFactory
 
-/// Flutter factoryId: "smallNative". Design har app ke hisab se native_small.xml me change karo.
-class SmallNativeAdFactory(private val inflater: LayoutInflater) : NativeAdFactory {
+/// Ek factory, layout ke hisab se: "smallNative" = native_small.xml, "bigNative" = native_big.xml (MainActivity.kt).
+/// Layout me ad_media (MediaView) ho to media bhi dikhata hai. Design har app ke hisab se XML me change karo.
+class LayoutNativeAdFactory(private val inflater: LayoutInflater, private val layout: Int) : NativeAdFactory {
     override fun createNativeAd(nativeAd: NativeAd, customOptions: MutableMap<String, Any>?): NativeAdView {
-        val view = inflater.inflate(R.layout.native_small, null) as NativeAdView
+        val view = inflater.inflate(layout, null) as NativeAdView
 
         val headline = view.findViewById<TextView>(R.id.ad_headline)
         val body = view.findViewById<TextView>(R.id.ad_body)
         val icon = view.findViewById<ImageView>(R.id.ad_icon)
         val cta = view.findViewById<Button>(R.id.ad_call_to_action)
+        val badge = view.findViewById<TextView>(R.id.ad_badge)
+        val media = view.findViewById<MediaView?>(R.id.ad_media)
 
         headline.text = nativeAd.headline
         view.headlineView = headline
@@ -34,10 +38,15 @@ class SmallNativeAdFactory(private val inflater: LayoutInflater) : NativeAdFacto
         cta.visibility = if (nativeAd.callToAction == null) View.INVISIBLE else View.VISIBLE
         view.callToActionView = cta
 
-        // Colors + gradient button Remote Config se (NativeAdStyle.kt)
+        media?.let {
+            it.mediaContent = nativeAd.mediaContent
+            view.mediaView = it
+        }
+
+        // Colors + gradient button + "Ad" badge Remote Config se (NativeAdStyle.kt)
         val style = NativeAdStyle(customOptions, view)
         view.setBackgroundColor(style.background)
-        style.applyText(headline, body, cta)
+        style.applyText(headline, body, cta, badge)
 
         view.setNativeAd(nativeAd)
         return view

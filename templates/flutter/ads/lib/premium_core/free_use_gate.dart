@@ -7,7 +7,7 @@ import 'premium_values.dart';
 bool freeUseAllowed({required int used, required int? limit, required bool isPremium}) =>
     isPremium || limit == null || used < limit;
 
-/// Free uses per feature before the paywall (`free_uses_<feature>` in Remote Config).
+/// Free uses per feature before the paywall (`useCount`, `premiumShow` in Remote Config).
 class FreeUseGate {
   FreeUseGate._();
 

@@ -7,13 +7,14 @@ import 'native_ad_manager.dart';
 
 /// Native ad + loading time par usi design ka shimmer.
 ///
-/// Onboarding: PageView ke BAHAR, bottom me ek hi baar lagao
+/// Intro: PageView ke BAHAR, bottom me ek hi baar lagao
 /// (ek NativeAd do AdWidget me nahi chal sakta, PageView pages ek saath build hote hai).
+/// Big native height 300, small native height 90.
 ///
 /// ```dart
 /// Column(children: [
 ///   Expanded(child: PageView(...)),
-///   NativeAdWidget(slot: NativeAdManager.onboarding, height: 120),
+///   NativeAdWidget(slot: NativeAdManager.intro, height: 300),
 /// ])
 /// ```
 class NativeAdWidget extends StatefulWidget {
@@ -28,7 +29,7 @@ class NativeAdWidget extends StatefulWidget {
   final NativeSlot slot;
   final double height;
 
-  /// Screen ke design ke hisab se custom shimmer. Null ho to default small-native shimmer.
+  /// Screen ke design ke hisab se custom shimmer. Null ho to slot ke factory jaisa default shimmer.
   final Widget? shimmer;
   final bool enabled;
 
@@ -72,7 +73,10 @@ class _NativeAdWidgetState extends State<NativeAdWidget> {
     return SizedBox(
       height: widget.height,
       width: double.infinity,
-      child: _ad == null ? (widget.shimmer ?? SmallNativeShimmer(height: widget.height)) : AdWidget(ad: _ad!),
+      child: _ad == null
+          ? (widget.shimmer ??
+              (widget.slot.factoryId == NativeFactory.big ? const BigNativeShimmer() : SmallNativeShimmer(height: widget.height)))
+          : AdWidget(ad: _ad!),
     );
   }
 }
@@ -107,6 +111,43 @@ class SmallNativeShimmer extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           box(80, 36, 18),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Big native layout jaisa shimmer: icon + 2 lines | media | CTA full width.
+class BigNativeShimmer extends StatelessWidget {
+  const BigNativeShimmer({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget box(double w, double h, [double r = 6]) => Container(
+          width: w,
+          height: h,
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(r)),
+        );
+    return Shimmer.fromColors(
+      baseColor: Colors.grey.shade300,
+      highlightColor: Colors.grey.shade100,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(children: [
+          Row(children: [
+            box(48, 48, 10),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [box(140, 14), const SizedBox(height: 8), box(double.infinity, 12)],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Expanded(child: box(double.infinity, double.infinity, 8)),
+          const SizedBox(height: 8),
+          box(double.infinity, 44, 12),
         ]),
       ),
     );

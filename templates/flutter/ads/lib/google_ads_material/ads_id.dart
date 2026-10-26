@@ -2,9 +2,12 @@ import 'package:flutter/foundation.dart';
 
 /// Pure app ki ads ids + online flags.
 /// Sab values Firebase Remote Config ki ek JSON key se aati hai (remote_config.dart -> RemoteConfigLoader.load).
+/// Key names IPTV app (config.json) jaise: appOpenAds, interSplash, nativeHome ...
 ///
-/// Convention (demo app jaisa): kisi bhi id ki value "11" = wo ad OFF.
-/// Debug build me Google test ids use hoti hai (jab tak id "11" na ho), platform ke hisab se.
+/// Convention: kisi bhi id ki value "11" (ya "") = wo ad OFF.
+/// Ad key = format prefix + jagah: `appOpen<Place>`, `inter<Place>`, `native<Place>`, `banner<Place>`, `rewarded<Place>`
+/// (rang wali keys jaise nativeBGColor ad key nahi). Nayi jagah = nayi key, isi naming se.
+/// Debug build me Google test ids use hoti hai (jab tak id "11" na ho), format aur platform ke hisab se.
 /// Release build me Google ki demo id (ca-app-pub-3940256099942544/...) kabhi serve nahi hoti: wo "11" maani jaati hai.
 class AdsId {
   AdsId._();
@@ -22,11 +25,28 @@ class AdsId {
   // Source: developers.google.com/admob/android/test-ads, developers.google.com/admob/ios/test-ads
   static const googleTestPublisher = 'ca-app-pub-3940256099942544';
   static bool get _ios => defaultTargetPlatform == TargetPlatform.iOS;
-  static String get _testInterstitial => '$googleTestPublisher/${_ios ? '4411468910' : '1033173712'}';
-  static String get _testAppOpen => '$googleTestPublisher/${_ios ? '5575463023' : '9257395921'}';
-  static String get _testBanner => '$googleTestPublisher/${_ios ? '2435281174' : '9214589741'}';
-  static String get _testNative => '$googleTestPublisher/${_ios ? '3986624511' : '2247696110'}';
-  static String get _testRewarded => '$googleTestPublisher/${_ios ? '1712485313' : '5224354917'}';
+  static String _testId(String key) {
+    final unit = switch (_format(key)) {
+      'appOpen' => _ios ? '5575463023' : '9257395921',
+      'inter' => _ios ? '4411468910' : '1033173712',
+      'native' => _ios ? '3986624511' : '2247696110',
+      'banner' => _ios ? '2435281174' : '9214589741',
+      _ => _ios ? '1712485313' : '5224354917', // rewarded
+    };
+    return '$googleTestPublisher/$unit';
+  }
+
+  static final _adKey = RegExp(r'^(appOpen|inter|native|banner|rewarded)([A-Z]\w*)?$');
+  static String? _format(String key) => key.endsWith('Color') ? null : _adKey.firstMatch(key)?.group(1);
+  static bool _isAdKey(String key) => _format(key) != null;
+
+  /// Screen flags jo ad ids ko band karte hai (IPTV: adShowHomeFlag home ka native + tap interstitial,
+  /// adShowIntroFlag intro ka native). Flag "1" nahi -> wo ids "11".
+  static const gates = {
+    'interPreLoad': 'adShowHomeFlag',
+    'nativeHome': 'adShowHomeFlag',
+    'nativeIntroBig': 'adShowIntroFlag',
+  };
 
   /// remote_config.dart Remote Config ka JSON yaha set karta hai.
   static void setJson(Map<String, dynamic> json) {
@@ -36,7 +56,9 @@ class AdsId {
 
   /// Koi bhi key padho (default "11" = off).
   static String get(String key, [String def = off]) => (_json[key] ?? def).toString();
-  static bool isOn(String key, [String def = '0']) => get(key, def) == '1';
+
+  /// "1" ya true = on (IPTV JSON me dono hai: "adShowHomeFlag": "1", "sendRevenueToAnalytics": true).
+  static bool isOn(String key, [String def = '0']) => const {'1', 'true'}.contains(get(key, def));
 
   static bool _allOff = false;
 
@@ -53,85 +75,55 @@ class AdsId {
   @visibleForTesting
   static void resetForTest() => _allOff = false;
 
-  static bool _isAdKey(String key) =>
-      (key.startsWith('fullscreen_') && key != 'fullscreen_on_in_splash_screen') ||
-      (key.startsWith('appopen_') && key != 'appopen_on_resume') ||
-      key.startsWith('banner_') ||
-      key.startsWith('native_') ||
-      key.startsWith('rewarded_');
-
-  /// Ad id: remote se, debug me test id. Remote "11" ho (ya purchase ho gaya) to "11" (ad off).
-  static String _id(String key, String testId) {
+  /// Ad id: remote se, debug me test id. Remote "11" ho, gate flag off ho, ya purchase ho gaya to "11" (ad off).
+  static String unit(String key) {
     if (_allOff) return off;
+    final gate = gates[key];
+    if (gate != null && !isOn(gate, '1')) return off;
     final v = get(key);
     if (isOff(v)) return off;
-    if (useTestIds) return testId;
+    if (useTestIds) return _testId(key);
     return v.startsWith(googleTestPublisher) ? off : v; // release me demo id = off
   }
+
+  /// `sendRevenueToAnalytics` (sab ads) aur `sendRevenueToAnalyticsFor<Key>` (ek ad), dono on hone chahiye.
+  /// Key na ho = on.
+  static bool revenueOn(String key) =>
+      isOn('sendRevenueToAnalytics', '1') && isOn('sendRevenueToAnalyticsFor${key[0].toUpperCase()}${key.substring(1)}', '1');
 
   static Duration _seconds(String key, int def) => Duration(seconds: int.tryParse(get(key, '$def')) ?? def);
 
   // ---------- Splash ----------
-  static bool get fullscreenOnInSplash => isOn('fullscreen_on_in_splash_screen');
-  static String get splashInterstitialHigh => _id('fullscreen_splash_adsId_high', _testInterstitial);
-  static String get splashInterstitialNormal => _id('fullscreen_splash_adsId_normal', _testInterstitial);
-  static String get splashAppOpenHigh => _id('appopen_splash_high', _testAppOpen);
-  static String get splashAppOpenNormal => _id('appopen_splash_normal', _testAppOpen);
+  /// `appOpenSplash` set ho to splash par app open, warna `interSplash` interstitial (IPTV jaisa).
+  static bool get splashUsesAppOpen => !isOff(unit('appOpenSplash'));
 
   /// Splash ad load ka max wait, phir app aage badhti hai.
-  static Duration get splashAdWait => _seconds('splash_ad_wait_seconds', 8);
+  static Duration get splashAdWait => _seconds('splashAdWaitSeconds', 8);
 
   // ---------- Interstitial (app ke andar) ----------
-  static String get interstitialHigh => _id('fullscreen_preload_high_adsId', _testInterstitial);
-  static String get interstitialNormal => _id('fullscreen_preload_normal_adsId', _testInterstitial);
-
   /// Tap par preloaded interstitial na ho to "Showing Ads..." ke saath max itna wait, phir bina ad aage.
-  static Duration get inAppAdWait => _seconds('inapp_ad_wait_seconds', 5);
+  static Duration get inAppAdWait => _seconds('inAppAdWaitSeconds', 5);
 
-  /// Screen wise on/off: "fullscreen_home", "fullscreen_gallery" ... "11", "0" ya "" = off.
-  static bool screenOn(String screenKey) {
-    final v = get(screenKey);
-    return !_allOff && !isOff(v) && v != '0';
-  }
-
-  /// `<screen>_ad_continue_ads_online`, jaise "home_screen_ad_continue_ads_online".
-  static bool screenContinue(String continueKey) => isOn(continueKey);
-
-  static bool get premiumCloseOn => screenOn('fullscreen_premium_close');
-
-  // ---------- App open ----------
-  static bool get appOpenOnResume => isOn('appopen_on_resume', '1');
-  static String get appOpenHigh => _id('appopen_high', _testAppOpen);
-  static String get appOpenNormal => _id('appopen_normal', _testAppOpen);
-
-  // ---------- Banner ----------
-  // Collapsible bhi adaptive test id use karta hai (Google ki test-ads table me alag collapsible id nahi hai).
-  static String get bannerAdaptive => _id('banner_adaptive', _testBanner);
-  static String get bannerCollapsible => _id('banner_collapsible', _testBanner);
-
-  // ---------- Native ----------
-  static String get nativeOnboardingHigh => _id('native_onboarding_high', _testNative);
-  static String get nativeOnboardingNormal => _id('native_onboarding_normal', _testNative);
+  /// `homeFlagOnline` "0" = home ke har tap par ad; "1" = har dusre tap par (homeFlag % 2 == 0).
+  static bool get homeAdEveryTap => get('homeFlagOnline', '1') == '0';
 
   /// Native design ke colors, native factory (Android NativeAdStyle.kt, iOS AppDelegate.swift) ko customOptions me jaate hai.
+  /// "#RRGGBB", "RRGGBB" ya "AARRGGBB".
   static Map<String, Object> get nativeColors => {
         'nativeBGColor': get('nativeBGColor', '222222'),
-        'btnBgColor_start': get('btnBgColor_start', 'FFFFFF'),
-        'btnBgColor_center': get('btnBgColor_center', ''), // optional, "" = sirf start -> end
-        'btnBgColor_end': get('btnBgColor_end', 'FFFFFF'),
+        'btnBgColor1': get('btnBgColor1', 'FFFFFF'), // CTA gradient start
+        'btnBgColor2': get('btnBgColor2', 'FFFFFF'), // CTA gradient end (1 = 2 -> solid)
         'btnGradientAngle': get('btnGradientAngle', '0'), // 0 = left->right, 90 = bottom->top
         'btnRadius': get('btnRadius', '30'), // dp / pt
         'btnTextColor': get('btnTextColor', '000000'),
         'headerTextColor': get('headerTextColor', 'FFFFFF'),
         'bodyTextColor': get('bodyTextColor', 'DDDDDD'),
+        'btnAdBgColor': get('btnAdBgColor', 'FFB300'), // "Ad" badge
+        'btnAdTextColor': get('btnAdTextColor', 'FFFFFF'),
       };
 
-  // ---------- Rewarded ----------
-  static String get rewardedHigh => _id('rewarded_high', _testRewarded);
-  static String get rewardedNormal => _id('rewarded_normal', _testRewarded);
-
   // ---------- Flow ----------
-  static bool get showRatingScreen => isOn('show_rating_screen');
-  static bool get showPremiumFirstTime => isOn('show_premium_first_time');
-  static bool get showPremiumAfterSplash => isOn('show_premium_after_splash');
+  static bool get showRateScreen => isOn('showRateScreen');
+  static bool get showPremiumFirstTime => isOn('showPremiumFirstTime');
+  static bool get showPremiumAfterSplash => isOn('showPremiumAfterSplash');
 }

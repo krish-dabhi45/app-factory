@@ -14,14 +14,16 @@ class RewardedAdManager {
   static RewardedAd? _ad;
   static bool _loading = false;
 
-  static bool get isOff => AdsId.isOff(AdsId.rewardedHigh) && AdsId.isOff(AdsId.rewardedNormal);
+  static const key = 'rewarded';
+
+  static bool get isOff => AdsId.isOff(AdsId.unit(key));
 
   static bool get isReady => !isOff && _ad != null;
 
   static Future<bool> preload() async {
     if (AdFlags.isPremium || isOff || !AdFlags.adsReady || _ad != null || _loading) return _ad != null;
     _loading = true;
-    _ad = await _load(AdsId.rewardedHigh) ?? await _load(AdsId.rewardedNormal);
+    _ad = await _load(AdsId.unit(key));
     _loading = false;
     return _ad != null;
   }
@@ -34,7 +36,7 @@ class RewardedAdManager {
       request: const AdRequest(),
       rewardedAdLoadCallback: RewardedAdLoadCallback(
         onAdLoaded: (ad) {
-          AdImpression.attach(ad, 'rewarded');
+          AdImpression.attach(ad, key);
           c.complete(ad);
         },
         onAdFailedToLoad: (e) {

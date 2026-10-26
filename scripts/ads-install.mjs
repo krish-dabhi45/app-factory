@@ -40,6 +40,7 @@ const DEPS = [
 ]
 // the Premium layer: installed unless --no-premium (an app with no paid tier); its packages only with it
 const PREMIUM = 'premium_core/'
+const NATIVE_LAYOUTS = ['native_small.xml', 'native_big.xml'] // factories "smallNative" (home) and "bigNative" (intro)
 const PREMIUM_DEPS = new Set(['purchases_flutter', 'shared_preferences'])
 const hasPremium = (root) => fs.existsSync(path.join(root, 'lib', PREMIUM))
 const depsFor = (premium) => DEPS.filter(([n]) => premium || !PREMIUM_DEPS.has(n))
@@ -144,13 +145,13 @@ export function install(root, { premium = true } = {}) {
 
   // Android: native factory, layout, Facebook, App ID
   const kdir = path.dirname(mainPath)
-  for (const f of ['NativeAdStyle.kt', 'SmallNativeAdFactory.kt']) put(path.join(kdir, f), fix(read(path.join(TEMPLATE, 'android', f))))
-  put(at('android/app/src/main/res/layout/native_small.xml'), read(path.join(TEMPLATE, 'android/native_small.xml')))
+  for (const f of ['NativeAdStyle.kt', 'LayoutNativeAdFactory.kt']) put(path.join(kdir, f), fix(read(path.join(TEMPLATE, 'android', f))))
+  for (const f of NATIVE_LAYOUTS) put(at('android/app/src/main/res/layout', f), read(path.join(TEMPLATE, 'android', f)))
   const mainText = read(mainPath)
   if (!/registerNativeAdFactory/.test(mainText)) {
     if (/^package [\w.]+\s+import io\.flutter\.embedding\.android\.FlutterActivity\s+class MainActivity\s*:\s*FlutterActivity\(\)\s*$/.test(mainText.trim())) {
-      fs.writeFileSync(mainPath, fix(read(path.join(TEMPLATE, 'android/MainActivity.kt')))); done.push(`${path.relative(root, mainPath)}: native factory "smallNative" + Facebook channel`)
-    } else todo.push(`${path.relative(root, mainPath)} is not Flutter's default: add from templates/flutter/ads/android/MainActivity.kt the configureFlutterEngine registration (GoogleMobileAdsPlugin.registerNativeAdFactory(flutterEngine, "smallNative", SmallNativeAdFactory(layoutInflater))), the "nativeChannel" handler and cleanUpFlutterEngine`)
+      fs.writeFileSync(mainPath, fix(read(path.join(TEMPLATE, 'android/MainActivity.kt')))); done.push(`${path.relative(root, mainPath)}: native factories "smallNative" + "bigNative" + Facebook channel`)
+    } else todo.push(`${path.relative(root, mainPath)} is not Flutter's default: add from templates/flutter/ads/android/MainActivity.kt the configureFlutterEngine registrations (GoogleMobileAdsPlugin.registerNativeAdFactory(flutterEngine, "smallNative", LayoutNativeAdFactory(layoutInflater, R.layout.native_small)) and the same for "bigNative" / R.layout.native_big), the "nativeChannel" handler and cleanUpFlutterEngine`)
   }
   const strings = 'android/app/src/main/res/values/strings.xml'
   put(at(strings), '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n</resources>\n')
@@ -192,9 +193,9 @@ import UIKit
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 }`
-  if (!/SmallNativeAdFactory/.test(delText)) {
-    if (delText.trim() === flutterDefault) { fs.writeFileSync(at(del), read(path.join(TEMPLATE, 'ios/AppDelegate.swift'))); done.push(`${del}: native factory "smallNative" (SmallNativeAdFactory + NativeAdStyle)`) }
-    else todo.push(`${del} is not Flutter's default: add from templates/flutter/ads/ios/AppDelegate.swift the imports (GoogleMobileAds, google_mobile_ads), the FLTGoogleMobileAdsPlugin.registerNativeAdFactory(…, factoryId: "smallNative", …) line after GeneratedPluginRegistrant, and everything below "// MARK: - Native ads"`)
+  if (!/TemplateNativeAdFactory/.test(delText)) {
+    if (delText.trim() === flutterDefault) { fs.writeFileSync(at(del), read(path.join(TEMPLATE, 'ios/AppDelegate.swift'))); done.push(`${del}: native factories "smallNative" + "bigNative" (TemplateNativeAdFactory + NativeAdStyle)`) }
+    else todo.push(`${del} is not Flutter's default: add from templates/flutter/ads/ios/AppDelegate.swift the imports (GoogleMobileAds, google_mobile_ads), the two FLTGoogleMobileAdsPlugin.registerNativeAdFactory(…, factoryId: "smallNative" / "bigNative", …) lines after GeneratedPluginRegistrant, and everything below "// MARK: - Native ads"`)
   }
   patch('ios/Runner/Info.plist', (s) => s.includes('GADApplicationIdentifier'),
     (s) => s.replace(/\n<\/dict>\n<\/plist>/, `\n\t<key>GADApplicationIdentifier</key>\n\t<string>${SAMPLE_APP_ID.ios}</string>\n</dict>\n</plist>`),
@@ -215,9 +216,9 @@ function templateFiles(root) {
   const m = new Map()
   for (const dir of ['lib', 'test', 'integration_test', 'assets'])
     for (const f of walk(path.join(TEMPLATE, dir)).filter((f) => hasPremium(root) || !f.startsWith(PREMIUM))) m.set(`${dir}/${f}`, fix(read(path.join(TEMPLATE, dir, f))))
-  if (mainPath) for (const f of ['NativeAdStyle.kt', 'SmallNativeAdFactory.kt'])
+  if (mainPath) for (const f of ['NativeAdStyle.kt', 'LayoutNativeAdFactory.kt'])
     m.set(path.relative(root, path.join(path.dirname(mainPath), f)), fix(read(path.join(TEMPLATE, 'android', f))))
-  m.set('android/app/src/main/res/layout/native_small.xml', read(path.join(TEMPLATE, 'android/native_small.xml')))
+  for (const f of NATIVE_LAYOUTS) m.set(`android/app/src/main/res/layout/${f}`, read(path.join(TEMPLATE, 'android', f)))
   return m
 }
 
@@ -463,15 +464,15 @@ function fixture(w) {
 // The template is the guide app's ads code (flutter-ads: "a copy of the guide app"): byte for byte, except the defaults
 // JSON, which leaves out the guide app's own credit values (its RemoteValues, not part of the pattern).
 const DEMO = process.env.ADS_DEMO || '/Users/mach/testing/common_flow_demo'
-const DEMO_ONLY_KEYS = ['credit_pack_credit', 'free_credit', 'week_credit', 'year_credit', 'free_uses_quick_edit']
+const DEMO_ONLY_KEYS = ['creditPackCredit', 'freeCredit', 'weekCredit', 'yearCredit']
 function demoSelftest() {
   if (!fs.existsSync(DEMO)) return `template = common_flow_demo: not checked (${DEMO} is not on this machine)`
   const kt = walk(path.join(DEMO, 'android/app/src/main')).find((f) => /(^|\/)MainActivity\.kt$/.test(f))
   const pairs = [
     ...['lib/google_ads_material', 'test/google_ads_material', 'lib/premium_core', 'test/premium_core'].flatMap((d) => walk(path.join(TEMPLATE, d)).map((f) => [`${d}/${f}`, `${d}/${f}`])),
     ...walk(path.join(TEMPLATE, 'integration_test')).map((f) => [`integration_test/${f}`, `integration_test/${f}`]),
-    ...['NativeAdStyle.kt', 'SmallNativeAdFactory.kt', 'MainActivity.kt'].map((f) => [`android/${f}`, path.join('android/app/src/main', path.dirname(kt), f)]),
-    ['android/native_small.xml', 'android/app/src/main/res/layout/native_small.xml'],
+    ...['NativeAdStyle.kt', 'LayoutNativeAdFactory.kt', 'MainActivity.kt'].map((f) => [`android/${f}`, path.join('android/app/src/main', path.dirname(kt), f)]),
+    ...NATIVE_LAYOUTS.map((f) => [`android/${f}`, `android/app/src/main/res/layout/${f}`]),
     ['ios/AppDelegate.swift', 'ios/Runner/AppDelegate.swift'],
   ]
   for (const [t, d] of pairs) assert.equal(read(path.join(TEMPLATE, t)), read(path.join(DEMO, d)), `template ${t} = common_flow_demo ${d}`)
@@ -479,7 +480,7 @@ function demoSelftest() {
     assert.deepEqual(walk(path.join(DEMO, d)).sort(), walk(path.join(TEMPLATE, d)).sort(), `${d}: same files in common_flow_demo and the template`)
   const demo = JSON.parse(read(path.join(DEMO, 'assets/remote_config_default.json')))
   for (const k of DEMO_ONLY_KEYS) delete demo[k]
-  assert.deepEqual(JSON.parse(read(path.join(TEMPLATE, 'assets/remote_config_default.json'))), demo, 'defaults JSON = common_flow_demo\'s without its demo-only keys (credits, its Quick Edit free uses)')
+  assert.deepEqual(JSON.parse(read(path.join(TEMPLATE, 'assets/remote_config_default.json'))), demo, 'defaults JSON = common_flow_demo\'s without its demo-only keys (its credit values)')
   const lock = read(path.join(DEMO, 'pubspec.lock'))
   for (const [n, v] of DEPS) assert.equal(locked(lock, n), v, `${n}: the installer pins the version common_flow_demo's pubspec.lock has`)
   assert.equal(locked(lock, 'webview_flutter_wkwebview'), WKWEBVIEW, 'webview_flutter_wkwebview: the version common_flow_demo resolves')
@@ -584,9 +585,9 @@ function changesSelftest() {
   assert.match(y, /- 1 files installed from the template — \*\*1 differ from it\*\*/)
   assert.match(y, /\*\*PASS\*\* I1 /, 'the defaults JSON is the template\'s file')
   assert.match(y, /\*\*PASS\*\* P1 /, 'a new key is an allowed addition')
-  w(json, r_(json).replace('"splash_ad_wait_seconds": "8"', '"splash_ad_wait_seconds": "3"'))
-  assert.match(changes(root, installed), /\*\*FAIL\*\* P1 .*\n  - `assets\/remote_config_default\.json` "splash_ad_wait_seconds": "3", the template has "8"\n/)
-  w(json, r_(json).replace('"splash_ad_wait_seconds": "3"', '"splash_ad_wait_seconds": "8"'))
+  w(json, r_(json).replace('"splashAdWaitSeconds": "8"', '"splashAdWaitSeconds": "3"'))
+  assert.match(changes(root, installed), /\*\*FAIL\*\* P1 .*\n  - `assets\/remote_config_default\.json` "splashAdWaitSeconds": "3", the template has "8"\n/)
+  w(json, r_(json).replace('"splashAdWaitSeconds": "3"', '"splashAdWaitSeconds": "8"'))
 
   // each rule broken once: every check fails, with the line that breaks it
   w('lib/data/picker.dart', r_('lib/data/picker.dart').replace('class Picker {', 'class Picker2 {').replace('app_open_ad_manager.dart', 'interstitial_ad_manager.dart'))
@@ -596,7 +597,7 @@ function changesSelftest() {
   w('pubspec.yaml', r_('pubspec.yaml').replace('cupertino_icons: ^1.0.8', 'cupertino_icons: ^1.0.9').replace(/^  webview_flutter_wkwebview: \^3\.20\.0 .*\n/m, ''))
   fs.appendFileSync(path.join(root, 'lib/google_ads_material/banner_ad_widget.dart'), '// edited\n')
   w('lib/google_ads_material/ads_id.dart', r_('lib/google_ads_material/ads_id.dart').replace(/^.*useTestIds.*\n/m, ''))
-  w('assets/remote_config_default.json', r_('assets/remote_config_default.json').replace('"splash_ad_wait_seconds": "8"', '"splash_ad_wait_seconds": "3"'))
+  w('assets/remote_config_default.json', r_('assets/remote_config_default.json').replace('"splashAdWaitSeconds": "8"', '"splashAdWaitSeconds": "3"'))
   fs.rmSync(path.join(root, 'lib/google_ads_material/app_hud.dart'))
   w('pubspec.lock', lockOf({ google_mobile_ads: '9.1.0', webview_flutter_wkwebview: '3.27.1' }))
   w('ios/Runner/Info.plist', r_('ios/Runner/Info.plist').replace(/\t<key>NSUserTrackingUsageDescription<\/key>\n\t<string>[^<]*<\/string>\n/, ''))
@@ -616,7 +617,7 @@ function changesSelftest() {
     /\*\*FAIL\*\* I4 [\s\S]*?  - `lib\/data\/picker\.dart` lost `class Picker \{`\n  - `lib\/data\/picker\.dart` gained `import '\.\.\/google_ads_material\/interstitial_ad_manager\.dart';`\n  - `lib\/data\/picker\.dart` gained `class Picker2 \{`\n/,
     /\*\*FAIL\*\* I5 .*\n  - lost `cupertino_icons: \^1\.0\.8`\n/,
     /  - `lib\/google_ads_material\/app_hud\.dart` missing\n/,
-    /  - `assets\/remote_config_default\.json` "splash_ad_wait_seconds": "3", the template has "8"\n/,
+    /  - `assets\/remote_config_default\.json` "splashAdWaitSeconds": "3", the template has "8"\n/,
     /  - `lib\/google_ads_material\/ads_id\.dart` lost `.*useTestIds.*`\n/,
     /  - `lib\/google_ads_material\/banner_ad_widget\.dart` differs from the template\n/,
     /\*\*FAIL\*\* P2 .*\n  - RemoteConfigLoader\.load\('my_app_v1'\): lib\/main\.dart:6\n  - FacebookInit\.init\(\): lib\/main\.dart:5\n/,
@@ -718,13 +719,13 @@ function selftest() {
   assert.ok(ads.length >= 15 && ads.every((f) => fs.existsSync(path.join(root, 'lib/google_ads_material', f))), 'every template Dart file copied')
   assert.match(r('test/google_ads_material/ads_rules_test.dart'), /package:my_app\/google_ads_material\/ads_id\.dart/)
   assert.doesNotMatch(r('integration_test/ads_device_test.dart'), /common_flow_demo/)
-  assert.match(r('android/app/src/main/kotlin/com/acme/my_app/SmallNativeAdFactory.kt'), /^package com\.acme\.my_app$/m)
-  assert.match(r('android/app/src/main/kotlin/com/acme/my_app/MainActivity.kt'), /^package com\.acme\.my_app$[\s\S]*registerNativeAdFactory\(\s*flutterEngine, "smallNative"/m)
-  assert.ok(fs.existsSync(path.join(root, 'android/app/src/main/res/layout/native_small.xml')))
+  assert.match(r('android/app/src/main/kotlin/com/acme/my_app/LayoutNativeAdFactory.kt'), /^package com\.acme\.my_app$/m)
+  assert.match(r('android/app/src/main/kotlin/com/acme/my_app/MainActivity.kt'), /^package com\.acme\.my_app$[\s\S]*registerNativeAdFactory\(\s*flutterEngine, "smallNative"[\s\S]*registerNativeAdFactory\(\s*flutterEngine, "bigNative", LayoutNativeAdFactory\(layoutInflater, R\.layout\.native_big\)/m)
+  assert.ok(NATIVE_LAYOUTS.every((f) => fs.existsSync(path.join(root, 'android/app/src/main/res/layout', f))))
   assert.match(r('android/app/src/main/AndroidManifest.xml'), /permission\.INTERNET[\s\S]*gms\.permission\.AD_ID[\s\S]*ads\.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713"[\s\S]*<\/application>/)
   assert.match(r('android/app/src/main/res/values/strings.xml'), /facebook_client_token_placeholder/)
   assert.match(r('android/app/build.gradle.kts'), /dependencies \{\n    implementation\("com\.facebook\.android:facebook-core:18\.0\.0"\)/)
-  assert.match(r('ios/Runner/AppDelegate.swift'), /registerNativeAdFactory\([\s\S]*factoryId: "smallNative"[\s\S]*class SmallNativeAdFactory/)
+  assert.match(r('ios/Runner/AppDelegate.swift'), /registerNativeAdFactory\([\s\S]*factoryId: "smallNative"[\s\S]*factoryId: "bigNative"[\s\S]*class TemplateNativeAdFactory/)
   assert.match(r('ios/Runner/Info.plist'), /<key>GADApplicationIdentifier<\/key>\n\t<string>ca-app-pub-3940256099942544~1458002511<\/string>\n\t<key>NSUserTrackingUsageDescription<\/key>\n\t<string>This identifier will be used to deliver personalized ads to you\.<\/string>\n<\/dict>/)
   assert.equal(r('ios/Runner.xcodeproj/project.pbxproj'), 'IPHONEOS_DEPLOYMENT_TARGET = 15.0;\nIPHONEOS_DEPLOYMENT_TARGET = 15.0;\n')
   const pub = r('pubspec.yaml')
@@ -734,7 +735,7 @@ function selftest() {
   assert.match(pub, /^dependency_overrides:\n  # .*\n  webview_flutter_wkwebview: 3\.27\.2\n/m)
   assert.doesNotMatch(pub.split('dependency_overrides:')[0], /webview_flutter_wkwebview/, 'not a dependency: deps would call it unused')
   assert.match(pub, /^flutter:\n  assets:\n    - assets\/remote_config_default\.json\n  uses-material-design: true/m)
-  assert.deepEqual(Object.keys(JSON.parse(r('assets/remote_config_default.json'))).filter((k) => /credit|quick_edit/.test(k)), [], 'no demo-only keys')
+  assert.deepEqual(Object.keys(JSON.parse(r('assets/remote_config_default.json'))).filter((k) => /[cC]redit/.test(k)), [], 'no demo-only keys')
   const prem = walk(path.join(TEMPLATE, 'lib/premium_core'))
   assert.ok(prem.length === 3 && prem.every((f) => fs.existsSync(path.join(root, 'lib/premium_core', f))), 'the Premium layer is installed by default')
   assert.match(r('test/premium_core/premium_rules_test.dart'), /package:my_app\/premium_core\/free_use_gate\.dart/)

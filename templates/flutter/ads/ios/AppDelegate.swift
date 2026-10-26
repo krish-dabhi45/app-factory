@@ -14,9 +14,11 @@ import google_mobile_ads
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    // Native ad factory (Flutter NativeFactory.small = "smallNative", Android: MainActivity.kt)
+    // Native ad factories (Flutter NativeFactory.small / .big, Android: MainActivity.kt)
     FLTGoogleMobileAdsPlugin.registerNativeAdFactory(
-      engineBridge.pluginRegistry, factoryId: "smallNative", nativeAdFactory: SmallNativeAdFactory())
+      engineBridge.pluginRegistry, factoryId: "smallNative", nativeAdFactory: TemplateNativeAdFactory(big: false))
+    FLTGoogleMobileAdsPlugin.registerNativeAdFactory(
+      engineBridge.pluginRegistry, factoryId: "bigNative", nativeAdFactory: TemplateNativeAdFactory(big: true))
   }
 }
 
@@ -32,12 +34,13 @@ struct NativeAdStyle {
     return v.isEmpty ? def : v
   }
 
-  /// "RRGGBB" ya "AARRGGBB" (Android Color.parseColor jaisa). Galat value -> default.
+  /// "#RRGGBB", "RRGGBB" ya "AARRGGBB" (Android Color.parseColor jaisa). Galat value -> default.
   func color(_ key: String, _ def: String) -> UIColor {
     NativeAdStyle.parse(str(key, def)) ?? NativeAdStyle.parse(def)!
   }
 
-  static func parse(_ hex: String) -> UIColor? {
+  static func parse(_ raw: String) -> UIColor? {
+    let hex = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
     guard hex.count == 6 || hex.count == 8, let v = UInt64(hex, radix: 16) else { return nil }
     let a = hex.count == 8 ? CGFloat((v >> 24) & 0xFF) / 255 : 1
     return UIColor(
@@ -49,14 +52,13 @@ struct NativeAdStyle {
   var header: UIColor { color("headerTextColor", "FFFFFF") }
   var body: UIColor { color("bodyTextColor", "DDDDDD") }
   var buttonText: UIColor { color("btnTextColor", "000000") }
+  var badgeBackground: UIColor { color("btnAdBgColor", "FFB300") }
+  var badgeText: UIColor { color("btnAdTextColor", "FFFFFF") }
   var radius: CGFloat { CGFloat(Double(str("btnRadius", "30")) ?? 30) }
 
-  /// CTA gradient: start -> (center optional) -> end.
+  /// CTA gradient: btnBgColor1 -> btnBgColor2 (dono same = solid).
   var buttonColors: [CGColor] {
-    let start = color("btnBgColor_start", "FFFFFF").cgColor
-    let end = color("btnBgColor_end", "FFFFFF").cgColor
-    if str("btnBgColor_center", "").isEmpty { return [start, end] }
-    return [start, color("btnBgColor_center", "FFFFFF").cgColor, end]
+    [color("btnBgColor1", "FFFFFF").cgColor, color("btnBgColor2", "FFFFFF").cgColor]
   }
 
   /// Angle -> start/end point, Android GradientDrawable.Orientation jaisa (0 = left->right, 90 = bottom->top).
@@ -77,13 +79,19 @@ final class GradientButton: UIButton {
   var gradient: CAGradientLayer { layer as! CAGradientLayer }
 }
 
-/// Flutter factoryId: "smallNative". Layout Android native_small.xml jaisa:
+/// Flutter factoryId "smallNative" (big false) — Android native_small.xml jaisa:
 /// icon 56 | "Ad" badge + headline, body (2 lines) | CTA button (min 80 x 40).
-final class SmallNativeAdFactory: NSObject, FLTNativeAdFactory {
+/// Flutter factoryId "bigNative" (big true) — Android native_big.xml jaisa:
+/// icon 48 | "Ad" badge + headline, body; media 150; CTA full width 44.
+final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
+  let big: Bool
+  init(big: Bool) { self.big = big }
+
   func createNativeAd(_ nativeAd: NativeAd, customOptions: [AnyHashable: Any]? = nil) -> NativeAdView? {
     let style = NativeAdStyle(options: customOptions ?? [:])
     let view = NativeAdView()
     view.backgroundColor = style.background
+    let iconSize: CGFloat = big ? 48 : 56
 
     let icon = UIImageView()
     icon.contentMode = .scaleAspectFit
@@ -93,8 +101,8 @@ final class SmallNativeAdFactory: NSObject, FLTNativeAdFactory {
     let badge = UILabel()
     badge.text = " Ad "
     badge.font = .systemFont(ofSize: 10)
-    badge.textColor = .white
-    badge.backgroundColor = UIColor(red: 1, green: 0.702, blue: 0, alpha: 1)  // #FFB300
+    badge.textColor = style.badgeText
+    badge.backgroundColor = style.badgeBackground
     badge.setContentHuggingPriority(.required, for: .horizontal)
 
     let headline = UILabel()
@@ -128,22 +136,38 @@ final class SmallNativeAdFactory: NSObject, FLTNativeAdFactory {
     let texts = UIStackView(arrangedSubviews: [titleRow, body])
     texts.axis = .vertical
     texts.spacing = 4
-    let row = UIStackView(arrangedSubviews: [icon, texts, cta])
+    let row = UIStackView(arrangedSubviews: big ? [icon, texts] : [icon, texts, cta])
     row.spacing = 10
     row.alignment = .center
-    row.translatesAutoresizingMaskIntoConstraints = false
-    view.addSubview(row)
 
-    NSLayoutConstraint.activate([
-      row.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
-      row.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
-      row.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-      row.topAnchor.constraint(greaterThanOrEqualTo: view.topAnchor, constant: 10),
-      icon.widthAnchor.constraint(equalToConstant: 56),
-      icon.heightAnchor.constraint(equalToConstant: 56),
-      cta.heightAnchor.constraint(equalToConstant: 40),
-      cta.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
-      cta.widthAnchor.constraint(greaterThanOrEqualTo: cta.titleLabel!.widthAnchor, constant: 24),  // 12 pt padding each side
+    var constraints = [
+      icon.widthAnchor.constraint(equalToConstant: iconSize),
+      icon.heightAnchor.constraint(equalToConstant: iconSize),
+      cta.heightAnchor.constraint(equalToConstant: big ? 44 : 40),
+    ]
+    let content: UIStackView
+    if big {
+      let media = MediaView()
+      media.mediaContent = nativeAd.mediaContent
+      view.mediaView = media
+      content = UIStackView(arrangedSubviews: [row, media, cta])
+      content.axis = .vertical
+      content.spacing = 8
+      constraints.append(media.heightAnchor.constraint(equalToConstant: 150))
+    } else {
+      content = row
+      constraints += [
+        cta.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
+        cta.widthAnchor.constraint(greaterThanOrEqualTo: cta.titleLabel!.widthAnchor, constant: 24),  // 12 pt padding each side
+      ]
+    }
+    content.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(content)
+    NSLayoutConstraint.activate(constraints + [
+      content.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
+      content.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+      content.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      content.topAnchor.constraint(greaterThanOrEqualTo: view.topAnchor, constant: 10),
     ])
 
     view.iconView = icon

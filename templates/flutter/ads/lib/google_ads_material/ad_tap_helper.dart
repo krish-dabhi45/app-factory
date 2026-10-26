@@ -1,43 +1,45 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
 
 import 'ad_flags.dart';
 import 'ads_id.dart';
 import 'interstitial_ad_manager.dart';
 
-/// Screen ke button tap par interstitial ka rule (home aur dusri screens dono ke liye).
+/// Home (aur har tab root) par screen kholne wale tap ka interstitial rule — IPTV app ka `onTapInter`.
 ///
-/// Home par kaha use karna hai: sabhi feature buttons.
-/// Kaha NAHI: settings button, premium button, bottom navigation.
+/// Kaha use karna hai: home / tab root ka har tap jo nayi screen kholta hai (card, tile, list row, play, open).
+/// Kaha NAHI: tab switch / bottom navigation, settings, premium, credits, bottom sheet ya dialog kholna, toggle.
 ///
 /// Rule:
-///  - screen id (jaise "fullscreen_home") == "11" -> kabhi ad nahi.
-///  - continue (jaise "home_screen_ad_continue_ads_online") == "1" -> har tap par ad.
-///  - continue == "0" -> sirf jab flag % 2 == 0.
-///  - Har tap par flag++ (ad dikhe ya na dikhe, demo app jaisa).
-///  - Next (inner) screen ke kisi feature tap par `AdTapHelper.resetHome()` (back button par nahi).
-///    User feature use karke home aaye to agla tap ad dikhayega, sirf back karke aaye to nahi.
+///  - Premium, `adShowHomeFlag` "1" nahi, ya `interPreLoad` "11" -> kabhi ad nahi (flag bhi nahi badhta).
+///  - `homeFlagOnline` "0" -> har tap par ad.
+///  - Warna ad sirf jab `homeFlag % 2 == 0`. Har tap par `homeFlag++`.
+///  - Khuli screen se wapas aane par (pop) `homeFlag` odd ho to `homeFlag++` -> agla tap phir ad dikhata hai.
+///    Isliye [open] ko route ka Future return karna hai: `() => Get.to(...)`, `() => Navigator.push(...)`,
+///    `() => context.push(...)` (go_router `go` nahi — wo wapas aane ka pata nahi deta).
+///  - Returning launch me splash ad ke baad `homeFlag` = 1 (SplashAds.run): home ka pehla tap bina ad.
 class AdTapHelper {
   AdTapHelper._();
 
-  /// Home screen ke feature buttons.
-  static void onHomeTap(VoidCallback goNext) {
-    final show = shouldShow(
-      screenKey: 'fullscreen_home',
-      continueKey: 'home_screen_ad_continue_ads_online',
-      flag: AdFlags.homeFlag,
-    );
+  static void onHomeTap(FutureOr<Object?> Function() open) {
+    Future<void> go() async {
+      await open();
+      onReturn();
+    }
+
+    if (AdFlags.isPremium || InterstitialAdManager.main.isOff) {
+      go();
+      return;
+    }
+    final show = homeTapShows(AdFlags.homeFlag, everyTap: AdsId.homeAdEveryTap);
     AdFlags.homeFlag++;
-    show ? InterstitialAdManager.main.show(onDone: goNext) : goNext();
+    show ? InterstitialAdManager.main.show(onDone: go) : go();
   }
 
-  /// Inner screen ke feature button tap par call karo (back button par nahi).
-  static void resetHome() => AdFlags.homeFlag = 0;
+  /// Pure rule (tests): is tap par ad?
+  static bool homeTapShows(int flag, {required bool everyTap}) => everyTap || flag.isEven;
 
-  /// Kisi aur screen ke liye apna flag rakho (AdFlags me) aur ye use karo.
-  static bool shouldShow({required String screenKey, required String continueKey, required int flag}) {
-    if (AdFlags.isPremium) return false;
-    if (!AdsId.screenOn(screenKey)) return false;
-    if (AdsId.screenContinue(continueKey)) return true;
-    return flag % 2 == 0;
+  /// Khuli screen band hone par (onHomeTap khud call karta hai).
+  static void onReturn() {
+    if (AdFlags.homeFlag.isOdd) AdFlags.homeFlag++;
   }
 }

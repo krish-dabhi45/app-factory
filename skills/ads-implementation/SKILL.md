@@ -76,6 +76,8 @@ The installed `test/google_ads_material/` and `integration_test/ads_device_test.
 
 ## 8. Verify — every check must pass; quote each result line
 
+Steps 1, 2 and 4 and section 9's command run together in one call — `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" verify "$(pwd)" <base>` (Bash timeout 600000: the builds take minutes). It prints each step's result line and, for a failed step, only the lines that say why (analyze errors and warnings, each failed test with its exception, the build's error lines, the failed checks); quote them. Run one step on its own only to look into its failure, and run `verify` again after a fix.
+
 1. `flutter analyze` — no issues.
 2. The whole test suite: `flutter test -j 4 -r failures-only --file-reporter json:.dart_tool/ads_tests_after.json` — the app's existing tests too. A test that passed in step 1 and fails now was broken by the wiring: fix the wiring, never the test.
 3. In an app-factory project: `pipeline.mjs coverage` and `pipeline.mjs deps`.

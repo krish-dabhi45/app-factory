@@ -9,6 +9,8 @@
 //                                       switches) and its packages; --no-premium when CONTRACT.md says the app has no paid tier
 //   node ads-install.mjs changes <project> <base>  → writes <project>/ADS_CHANGES.md: every file the ads work added,
 //                                       changed or deleted since <base>, from git (see changes())
+//   node ads-install.mjs verify <project> <base>   → skills/ads-implementation steps 8.1, 8.2, 8.4 and 9 in one call: each
+//                                       step's result line, on a failure the lines that say why; exit 1 when one fails
 //   node ads-install.mjs selftest
 // Template identifiers replaced: `package:common_flow_demo/` → `package:<pubspec name>/`,
 // `package com.demo.common_flow_demo` → the package of the app's MainActivity.kt.
@@ -17,7 +19,7 @@ import path from 'node:path'
 import os from 'node:os'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'flutter', 'ads')
 // Google's sample App IDs (developers.google.com/admob/{android,ios}/quick-start): debug builds work; the owner replaces them
@@ -292,12 +294,18 @@ export function changes(root, base) {
     own.filter(([f]) => !patched.has(f) && !/^(lib|test|integration_test)\//.test(f) && f !== 'CONTRACT.md').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`))
   check('I2', 'No test that existed before was changed or deleted',
     own.filter(([f, x]) => /^(test|integration_test)\//.test(f) && x.status !== 'A').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`))
+  const inApp = (p) => { // a path from a test report, relative to the app — also when the report was recorded in another folder
+    const r = path.relative(root, p); if (!r.startsWith('..')) return r
+    const parts = p.split(path.sep)
+    for (let i = 1; i < parts.length; i++) if (fs.existsSync(path.join(root, ...parts.slice(i)))) return parts.slice(i).join('/')
+    return r
+  }
   const run = (name) => {
     const p = path.join(root, '.dart_tool', name); if (!fs.existsSync(p)) return null
     const suite = {}, test = {}, passed = new Set(), all = new Set()
     for (const l of read(p).split('\n').filter((l) => l.trim())) {
       const e = JSON.parse(l)
-      if (e.type === 'suite') suite[e.suite.id] = path.relative(root, e.suite.path || '')
+      if (e.type === 'suite') suite[e.suite.id] = inApp(e.suite.path || '')
       else if (e.type === 'testStart') test[e.test.id] = `${suite[e.test.suiteID]}: ${e.test.name}`
       else if (e.type === 'testDone' && !e.hidden) { all.add(test[e.testID]); if (e.result === 'success' && !e.skipped) passed.add(test[e.testID]) }
     }
@@ -559,6 +567,11 @@ function changesSelftest() {
   assert.match(r, /\*\*PASS\*\* P10 .*\n  - lib\/main\.dart:7\n/)
   assert.match(r, /\*\*PASS\*\* P12 .*\n  - lib\/main\.dart:5\n/)
   assert.match(r, /\*\*PASS\*\* P6 .*\n  - lib\/data\/picker\.dart:7 `pickImage` — skipNextResume\(\) at line 6\n/)
+  // the same test report recorded in another folder (the app was copied or moved after step 1): still matched
+  const beforeJson = path.join(root, '.dart_tool', TESTS_BEFORE), recorded = read(beforeJson)
+  fs.writeFileSync(beforeJson, recorded.replaceAll(JSON.stringify(root).slice(1, -1), '/elsewhere/old-copy'))
+  assert.match(changes(root, base), /\*\*PASS\*\* I3 .* \(1 passed before; 2 of 3 pass now\)/)
+  fs.writeFileSync(beforeJson, recorded)
   w(REPORT, r)
   assert.equal(changes(root, base), r, 'the report does not list itself')
   g('add', '-A'); g('commit', '-q', '-m', 'the rest of the ads work')
@@ -622,6 +635,75 @@ function changesSelftest() {
   ]) assert.match(x, ev)
   fs.rmSync(root, { recursive: true, force: true })
   return 'changes selftest ok'
+}
+
+// skills/ads-implementation steps 8.1 (analyze), 8.2 (whole test suite, JSON for I3), 8.4 (debug builds; iOS on a Mac) and 9
+// (ADS_CHANGES.md) in one call, so the agent reads one short result instead of four outputs. Every step runs even after a
+// failure: the agent fixes from one result. `flutter` is the binary (FLUTTER, else flutter on PATH).
+export function verify(root, base, { flutter = process.env.FLUTTER || 'flutter', ios = process.platform === 'darwin' } = {}) {
+  const out = []; let ok = true
+  const run = (title, args, pick) => {
+    const t = Date.now(), r = spawnSync(flutter, args, { cwd: root, encoding: 'utf8', maxBuffer: 256 << 20 })
+    const ls = `${r.stdout || ''}\n${r.stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim())
+    const pass = r.status === 0; ok &&= pass
+    out.push(`${pass ? 'PASS' : 'FAIL'} ${title}: \`flutter ${args.join(' ')}\` (exit ${r.status ?? r.error?.code}, ${Math.round((Date.now() - t) / 1000)} s)`,
+      ...pick(ls, pass).filter(Boolean).map((l) => `  ${l.trim()}`))
+  }
+  const why = (ls, pass, keep) => pass ? [ls.findLast((l) => keep.test(l))] // the success line, else the error lines and the last line
+    : [...ls.filter((l) => /\berror\b|Error:|FAILURE|What went wrong|\[!\]|^\s*>/i.test(l)).slice(0, 15), ls.at(-1)]
+  run('8.1 analyze', ['analyze'], (ls) => [ls.findLast((l) => /issues? found|No issues found/.test(l)) || ls.at(-1), ...ls.filter((l) => /^\s*(error|warning) •/.test(l)).slice(0, 20)])
+  const json = path.join(root, '.dart_tool', TESTS_AFTER)
+  run('8.2 test suite', ['test', '-j', '4', '-r', 'failures-only', '--file-reporter', `json:.dart_tool/${TESTS_AFTER}`], (ls, pass) => {
+    if (pass || !fs.existsSync(json)) return [ls.at(-1)]
+    const name = {}, err = {}, caught = {}, failed = [] // caught: the framework's "EXCEPTION CAUGHT" print, where the real cause is
+    for (const e of read(json).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))) {
+      if (e.type === 'testStart') name[e.test.id] = e.test.name
+      else if (e.type === 'error') err[e.testID] ??= e.error.split('\n')[0].slice(0, 160)
+      else if (e.type === 'print' && /EXCEPTION CAUGHT/.test(e.message)) caught[e.testID] ??= e.message.split('\n').slice(2, 4).map((l) => l.trim()).join(' ').slice(0, 200)
+      else if (e.type === 'testDone' && !e.hidden && e.result !== 'success') failed.push(e.testID)
+    }
+    return [ls.at(-1), ...failed.slice(0, 15).map((id) => `✗ ${name[id]} — ${caught[id] || err[id] || 'no error message'}`)]
+  })
+  run('8.4 Android build', ['build', 'apk', '--debug'], (ls, pass) => why(ls, pass, /✓ Built/))
+  if (ios) run('8.4 iOS build', ['build', 'ios', '--simulator', '--debug'], (ls, pass) => why(ls, pass, /✓ Built/))
+  else out.push('SKIP 8.4 iOS build: not a Mac')
+  const r = changes(root, base), rl = r.split('\n')
+  const fails = rl.flatMap((l, i) => l.startsWith('- **FAIL**') ? [l, ...rl.slice(i + 1).filter((_, k, a) => a.slice(0, k + 1).every((x) => x.startsWith('  - '))).slice(0, 3).map((x) => `  ${x}`)] : [])
+  fs.writeFileSync(path.join(root, REPORT), r); ok &&= !fails.length
+  out.push(`${fails.length ? 'FAIL' : 'PASS'} 9 ${REPORT} written`, ...r.split('\n').filter((l) => l.startsWith('- ') && !l.startsWith('- `') && !l.startsWith('- **')).slice(0, 6).map((l) => `  ${l}`),
+    ...fails.map((l) => l.startsWith('- **FAIL**') ? `  ${l.replace('- ', '')}` : l), ...(fails.length ? [`  (all evidence lines in ${REPORT})`] : []))
+  return { ok, text: out.join('\n') }
+}
+
+function verifySelftest() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-verify-'))
+  const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), s) }
+  fixture(w)
+  const g = (...a) => execFileSync('git', ['-C', root, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { encoding: 'utf8' })
+  g('init', '-q'); g('add', '-A'); g('commit', '-q', '-m', 'base'); const base = g('rev-parse', 'HEAD').trim()
+  install(root)
+  // a flutter stand-in: analyze finds an error among infos, one test fails, the APK builds
+  w('flutter.sh', `#!/bin/sh
+case "$1 $2" in
+  "analyze ") printf '  info • Unused • lib/a.dart:1:1 • unused\n  error • Undefined name x • lib/b.dart:2:3 • undefined_identifier\n\n2 issues found. (ran in 1.0s)\n'; exit 1;;
+  "test -j") printf '%s\n' '{"type":"testStart","test":{"id":1,"name":"home opens"}}' '{"type":"print","testID":1,"message":"══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞══\\nThe following TestFailure was thrown running a test:\\nExpected: exactly one matching candidate\\n  Actual: _TextWidgetFinder:<Found 0 widgets>\\nmore"}' '{"type":"error","testID":1,"error":"Test failed. See exception logs above.\\nThe test description was: home opens"}' '{"type":"testDone","testID":1,"result":"failure","hidden":false}' > .dart_tool/${TESTS_AFTER}; echo '00:01 +2 -1: Some tests failed.'; exit 1;;
+  "build apk") echo 'Running Gradle task'; echo '✓ Built build/app/outputs/flutter-apk/app-debug.apk'; exit 0;;
+esac
+exit 9
+`)
+  fs.chmodSync(path.join(root, 'flutter.sh'), 0o755); fs.mkdirSync(path.join(root, '.dart_tool'), { recursive: true })
+  const v = verify(root, base, { flutter: path.join(root, 'flutter.sh'), ios: false })
+  assert.equal(v.ok, false)
+  assert.match(v.text, /^FAIL 8\.1 analyze: `flutter analyze` \(exit 1, \d+ s\)\n  2 issues found\. \(ran in 1\.0s\)\n  error • Undefined name x • lib\/b\.dart:2:3 • undefined_identifier\n/)
+  assert.doesNotMatch(v.text, /info • Unused/, 'infos are counted, not listed')
+  assert.match(v.text, /FAIL 8\.2 test suite: .*\n  00:01 \+2 -1: Some tests failed\.\n  ✗ home opens — Expected: exactly one matching candidate Actual: _TextWidgetFinder:<Found 0 widgets>\n/)
+  assert.match(v.text, /PASS 8\.4 Android build: .*\n  ✓ Built build\/app\/outputs\/flutter-apk\/app-debug\.apk\nSKIP 8\.4 iOS build: not a Mac\n/)
+  assert.doesNotMatch(v.text, /Running Gradle task/, 'a passing step prints only its result line')
+  assert.match(v.text, /(PASS|FAIL) 9 ADS_CHANGES\.md written\n  - \d+ files installed from the template/)
+  assert.match(v.text, /  \*\*FAIL\*\* P2 .*\n    - .+\n/, 'a failed check comes with its evidence lines')
+  assert.ok(fs.existsSync(path.join(root, REPORT)))
+  fs.rmSync(root, { recursive: true, force: true })
+  return 'verify selftest ok'
 }
 
 function selftest() {
@@ -711,7 +793,11 @@ function selftest() {
 }
 
 const argv = process.argv.slice(2)
-if (argv[0] === 'selftest') console.log(`${selftest()}\n${changesSelftest()}\n${demoSelftest()}`)
+if (argv[0] === 'selftest') console.log(`${selftest()}\n${changesSelftest()}\n${verifySelftest()}\n${demoSelftest()}`)
+else if (argv[0] === 'verify' && argv.length === 3) {
+  const { ok, text } = verify(path.resolve(argv[1]), argv[2])
+  console.log(text); if (!ok) process.exit(1)
+}
 else if (argv[0] === 'changes' && (argv.length === 3 || argv.length === 4)) {
   const out = path.resolve(argv[3] || path.join(argv[1], REPORT))
   const r = changes(path.resolve(argv[1]), argv[2])

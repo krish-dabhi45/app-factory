@@ -9,14 +9,14 @@ void main() {
       navigatorKey: AppHud.navigatorKey,
       home: Scaffold(body: Center(child: ElevatedButton(onPressed: () => taps++, child: const Text('tap')))),
     ));
-    AppHud.show(status: 'Showing Ads...');
+    AppHud.show(status: 'Loading...');
     await tester.pump();
-    expect(find.text('Showing Ads...'), findsOneWidget);
+    expect(find.text('Loading...'), findsOneWidget);
     await tester.tap(find.text('tap'), warnIfMissed: false);
     expect(taps, 0, reason: 'barrier blocks the screen');
     AppHud.dismiss();
     await tester.pump();
-    expect(find.text('Showing Ads...'), findsNothing);
+    expect(find.text('Loading...'), findsNothing);
     await tester.tap(find.text('tap'));
     expect(taps, 1);
   });

@@ -54,23 +54,10 @@ struct NativeAdStyle {
   var buttonText: UIColor { color("btnTextColor", "000000") }
   var badgeBackground: UIColor { color("btnAdBgColor", "FFB300") }
   var badgeText: UIColor { color("btnAdTextColor", "FFFFFF") }
-  var radius: CGFloat { CGFloat(Double(str("btnRadius", "30")) ?? 30) }
-
-  /// CTA gradient: btnBgColor1 -> btnBgColor2 (dono same = solid).
+  /// CTA gradient (IPTV MainActivity.kt:316-328): top-right btnBgColor2 -> bottom-left btnBgColor1 (dono same = solid),
+  /// corner 10.
   var buttonColors: [CGColor] {
-    [color("btnBgColor1", "FFFFFF").cgColor, color("btnBgColor2", "FFFFFF").cgColor]
-  }
-
-  /// Angle -> start/end point, Android GradientDrawable.Orientation jaisa (0 = left->right, 90 = bottom->top).
-  var buttonPoints: (CGPoint, CGPoint) {
-    switch Int(str("btnGradientAngle", "0")) ?? 0 {
-    case 45: return (CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 0))
-    case 90: return (CGPoint(x: 0.5, y: 1), CGPoint(x: 0.5, y: 0))
-    case 135: return (CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 0))
-    case 180: return (CGPoint(x: 1, y: 0.5), CGPoint(x: 0, y: 0.5))
-    case 270: return (CGPoint(x: 0.5, y: 0), CGPoint(x: 0.5, y: 1))
-    default: return (CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5))
-    }
+    [color("btnBgColor2", "FFFFFF").cgColor, color("btnBgColor1", "FFFFFF").cgColor]
   }
 }
 
@@ -79,10 +66,10 @@ final class GradientButton: UIButton {
   var gradient: CAGradientLayer { layer as! CAGradientLayer }
 }
 
-/// Flutter factoryId "smallNative" (big false) — Android native_small.xml jaisa:
-/// icon 56 | "Ad" badge + headline, body (2 lines) | CTA button (min 80 x 40).
-/// Flutter factoryId "bigNative" (big true) — Android native_big.xml jaisa:
-/// icon 48 | "Ad" badge + headline, body; media 150; CTA full width 44.
+/// Flutter factoryId "smallNative" (big false, height 150) — Android native_small.xml jaisa (IPTV native_admob_small.xml):
+/// icon 48 | "Ad" badge + headline, advertiser + stars, body (2 lines); CTA full width 40.
+/// Flutter factoryId "bigNative" (big true, height 310) — Android native_big.xml jaisa:
+/// media 150 on top (IPTV intro order), then the same row, CTA full width 44.
 final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
   let big: Bool
   init(big: Bool) { self.big = big }
@@ -91,7 +78,7 @@ final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
     let style = NativeAdStyle(options: customOptions ?? [:])
     let view = NativeAdView()
     view.backgroundColor = style.background
-    let iconSize: CGFloat = big ? 48 : 56
+    let iconSize: CGFloat = 48
 
     let icon = UIImageView()
     icon.contentMode = .scaleAspectFit
@@ -118,25 +105,39 @@ final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
     body.numberOfLines = 2
     body.isHidden = nativeAd.body == nil
 
+    let advertiser = UILabel()
+    advertiser.text = nativeAd.advertiser
+    advertiser.font = .systemFont(ofSize: 11)
+    advertiser.textColor = style.body
+    advertiser.isHidden = nativeAd.advertiser == nil
+
+    let stars = UILabel()
+    let full = min(5, max(0, Int((nativeAd.starRating?.doubleValue ?? 0).rounded())))
+    stars.text = String(repeating: "★", count: full) + String(repeating: "☆", count: 5 - full)
+    stars.font = .systemFont(ofSize: 11)
+    stars.textColor = .systemOrange
+    stars.isHidden = nativeAd.starRating == nil
+
     let cta = GradientButton(type: .custom)
     cta.setTitle(nativeAd.callToAction, for: .normal)
     cta.setTitleColor(style.buttonText, for: .normal)
     cta.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
     cta.gradient.colors = style.buttonColors
-    (cta.gradient.startPoint, cta.gradient.endPoint) = style.buttonPoints
-    cta.layer.cornerRadius = style.radius
+    (cta.gradient.startPoint, cta.gradient.endPoint) = (CGPoint(x: 1, y: 0), CGPoint(x: 0, y: 1))
+    cta.layer.cornerRadius = 10
     cta.clipsToBounds = true
     cta.isUserInteractionEnabled = false  // click SDK handle karta hai
     cta.isHidden = nativeAd.callToAction == nil
-    cta.setContentCompressionResistancePriority(.required, for: .horizontal)
 
     let titleRow = UIStackView(arrangedSubviews: [badge, headline])
     titleRow.spacing = 6
     titleRow.alignment = .center
-    let texts = UIStackView(arrangedSubviews: [titleRow, body])
+    let starRow = UIStackView(arrangedSubviews: [advertiser, stars])
+    starRow.spacing = 6
+    let texts = UIStackView(arrangedSubviews: [titleRow, starRow, body])
     texts.axis = .vertical
-    texts.spacing = 4
-    let row = UIStackView(arrangedSubviews: big ? [icon, texts] : [icon, texts, cta])
+    texts.spacing = 2
+    let row = UIStackView(arrangedSubviews: [icon, texts])
     row.spacing = 10
     row.alignment = .center
 
@@ -145,22 +146,17 @@ final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
       icon.heightAnchor.constraint(equalToConstant: iconSize),
       cta.heightAnchor.constraint(equalToConstant: big ? 44 : 40),
     ]
-    let content: UIStackView
+    var parts: [UIView] = [row, cta]
     if big {
       let media = MediaView()
       media.mediaContent = nativeAd.mediaContent
       view.mediaView = media
-      content = UIStackView(arrangedSubviews: [row, media, cta])
-      content.axis = .vertical
-      content.spacing = 8
+      parts.insert(media, at: 0)
       constraints.append(media.heightAnchor.constraint(equalToConstant: 150))
-    } else {
-      content = row
-      constraints += [
-        cta.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
-        cta.widthAnchor.constraint(greaterThanOrEqualTo: cta.titleLabel!.widthAnchor, constant: 24),  // 12 pt padding each side
-      ]
     }
+    let content = UIStackView(arrangedSubviews: parts)
+    content.axis = .vertical
+    content.spacing = 8
     content.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(content)
     NSLayoutConstraint.activate(constraints + [
@@ -173,6 +169,8 @@ final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
     view.iconView = icon
     view.headlineView = headline
     view.bodyView = body
+    view.advertiserView = advertiser
+    view.starRatingView = stars
     view.callToActionView = cta
     view.nativeAd = nativeAd
     return view

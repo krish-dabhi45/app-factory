@@ -1,11 +1,12 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import 'ad_flags.dart';
 import 'ad_impression.dart';
 import 'ads_id.dart';
+import 'interstitial_ad_manager.dart';
 
 /// App open ad, Remote Config key [key] (jaise "appOpenAds") ki id se. Close ke baad preload.
 class AppOpenSlot {
@@ -56,7 +57,8 @@ class AppOpenSlot {
     return c.future;
   }
 
-  bool show({required VoidCallback onDone, VoidCallback? onShown, bool preloadAfter = true}) {
+  /// [openBehind]: [onDone] impression ke 1 s baad (splash, IPTV `app_open_ad.dart:64-69`); warna ad band hone par.
+  bool show({required VoidCallback onDone, VoidCallback? onShown, bool preloadAfter = true, bool openBehind = false}) {
     if (!isReady || AdFlags.isPremium || AdFlags.isFullScreenAdShowing) {
       onDone();
       if (preloadAfter) preload();
@@ -64,24 +66,8 @@ class AppOpenSlot {
     }
     final ad = _ad!;
     _ad = null;
-    ad.fullScreenContentCallback = FullScreenContentCallback(
-      onAdShowedFullScreenContent: (_) {
-        AdFlags.isFullScreenAdShowing = true;
-        onShown?.call();
-      },
-      onAdDismissedFullScreenContent: (ad) {
-        AdFlags.isFullScreenAdShowing = false;
-        ad.dispose();
-        onDone();
-        if (preloadAfter) preload();
-      },
-      onAdFailedToShowFullScreenContent: (ad, e) {
-        AdFlags.isFullScreenAdShowing = false;
-        ad.dispose();
-        onDone();
-        if (preloadAfter) preload();
-      },
-    );
+    ad.fullScreenContentCallback =
+        fullScreenCallback(onDone: onDone, onShown: onShown, openBehind: openBehind, after: preloadAfter ? preload : null);
     ad.show();
     return true;
   }
@@ -91,6 +77,9 @@ class AppOpenAdManager {
   AppOpenAdManager._();
 
   static final splash = AppOpenSlot('appOpenSplash');
+
+  /// Intro ka last Continue (IPTV `intro_screen.dart:41`, `:113`): intro khulte hi preload, ready ho tabhi dikhe.
+  static final intro = AppOpenSlot('appOpenIntro');
 
   /// App background -> foreground (AppResumeAdListener).
   static final resume = AppOpenSlot('appOpenAds');
@@ -108,6 +97,7 @@ class AppResumeAdListener {
 
   static DateTime? _skipUntil;
   static int _blocked = 0;
+  static bool _hidden = false;
 
   /// App se jaan-bujh kar bahar jaane se pehle call karo (share sheet, store review/page, purchase sheet,
   /// browser, banner/native ad click). Agla foreground (5 min ke andar) resume ad nahi dikhayega.
@@ -125,24 +115,36 @@ class AppResumeAdListener {
     return enabled && _blocked == 0 && !AdFlags.isPremium && !AdFlags.isFullScreenAdShowing;
   }
 
+  /// Share sheet, purchase sheet, review dialog translucent hote hai: app sirf pause hota hai (background /
+  /// foreground event nahi aata), to skip agle asli resume ad ko kha jaata. Hidden hue bina wapas resumed -> skip hatao.
+  /// Asli bahar jaana (browser, store) hidden se guzarta hai: wahan skip foreground event hi consume karta hai.
+  @visibleForTesting
+  static void lifecycle(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden) _hidden = true;
+    if (state != AppLifecycleState.resumed) return;
+    if (!_hidden) _skipUntil = null;
+    _hidden = false;
+  }
+
   @visibleForTesting
   static void resetForTest() {
     enabled = false;
     _skipUntil = null;
     _blocked = 0;
+    _hidden = false;
   }
 
   static void start() {
     if (_sub != null) return;
+    AppLifecycleListener(onStateChange: lifecycle); // app ke saath hamesha zinda
     AppStateEventNotifier.startListening();
     _sub = AppStateEventNotifier.appStateStream.listen((state) {
-      // Background me jaate hi load (pichla load fail hua ho ya 4 ghante purana ho), IPTV jaisa.
+      // Sirf background me jaate hi load (IPTV `life_cycle.dart:28-31`): app start par nahi.
       if (state == AppState.background) {
         AppOpenAdManager.resume.preload();
         return;
       }
       if (shouldShowOnForeground()) AppOpenAdManager.resume.show(onDone: () {});
     });
-    AppOpenAdManager.resume.preload();
   }
 }

@@ -16,7 +16,9 @@ import 'interstitial_ad_manager.dart';
 ///  - Khuli screen se wapas aane par (pop) `homeFlag` odd ho to `homeFlag++` -> agla tap phir ad dikhata hai.
 ///    Isliye [open] ko route ka Future return karna hai: `() => Get.to(...)`, `() => Navigator.push(...)`,
 ///    `() => context.push(...)` (go_router `go` nahi — wo wapas aane ka pata nahi deta).
-///  - Returning launch me splash ad ke baad `homeFlag` = 1 (SplashAds.run): home ka pehla tap bina ad.
+///  - Ad wale tap par "Loading..." loader 2 s (`inAppAdWaitSeconds`), phir ad; screen ad ke impression ke 1 s baad
+///    ad ke peeche khulti hai (IPTV `app_variable.dart:71-76`, `ads_load_util.dart:199-203`).
+///  - Returning launch me splash ad ke baad Home aaye to `homeFlag` = 1 (SplashAds.run homeFollows): home ka pehla tap bina ad.
 class AdTapHelper {
   AdTapHelper._();
 
@@ -32,7 +34,7 @@ class AdTapHelper {
     }
     final show = homeTapShows(AdFlags.homeFlag, everyTap: AdsId.homeAdEveryTap);
     AdFlags.homeFlag++;
-    show ? InterstitialAdManager.main.show(onDone: go) : go();
+    show ? InterstitialAdManager.main.show(onDone: go, loader: true, openBehind: true) : go();
   }
 
   /// Pure rule (tests): is tap par ad?

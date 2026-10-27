@@ -22,6 +22,8 @@ class RemoteConfigState {
 /// 2. Firebase init. google-services.json / GoogleService-Info.plist na ho to app band nahi hoti.
 /// 3. fetchAndActivate (timeout 10 s; minimum interval debug 0, release 5 min).
 /// 4. Online JSON defaults ke upar merge: jo key online nahi hai uski default rahti hai.
+///    Fetch fail (offline, timeout) ho to Firebase ki pichli activated value (device par saved) — IPTV ki tarah
+///    pichle online ids chalte hai (IPTV SharedPreferences me rakhta hai, `ads_splash_utils.dart:32-97`, `197-269`).
 class RemoteConfigLoader {
   RemoteConfigLoader._();
 
@@ -40,23 +42,32 @@ class RemoteConfigLoader {
       return;
     }
 
+    final remoteConfig = FirebaseRemoteConfig.instance;
+    var fetched = true;
     try {
-      final remoteConfig = FirebaseRemoteConfig.instance;
       await remoteConfig.setConfigSettings(RemoteConfigSettings(
         fetchTimeout: const Duration(seconds: 10),
         minimumFetchInterval: kDebugMode ? Duration.zero : const Duration(minutes: 5),
       ));
       await remoteConfig.fetchAndActivate();
+    } catch (e) {
+      fetched = false;
+      debugPrint('RemoteConfigLoader: fetch failed ($e), using the last activated values');
+    }
+    try {
       final raw = remoteConfig.getString(remoteConfigKey);
       if (raw.isEmpty) {
-        RemoteConfigState.message = 'Remote Config key "$remoteConfigKey" is empty. Using default values.';
+        RemoteConfigState.message = fetched
+            ? 'Remote Config key "$remoteConfigKey" is empty. Using default values.'
+            : 'Remote Config fetch failed and nothing was fetched before. Using default values.';
         return;
       }
       AdsId.setJson(merge(defaults, raw));
       RemoteConfigState.usingRemoteValues = true;
-      RemoteConfigState.message = 'Remote Config ($remoteConfigKey) is live.';
+      RemoteConfigState.message =
+          fetched ? 'Remote Config ($remoteConfigKey) is live.' : 'Remote Config fetch failed. Using the last fetched values.';
     } catch (e) {
-      RemoteConfigState.message = 'Remote Config fetch failed: $e. Using default values.';
+      RemoteConfigState.message = 'Remote Config read failed: $e. Using default values.';
     }
   }
 

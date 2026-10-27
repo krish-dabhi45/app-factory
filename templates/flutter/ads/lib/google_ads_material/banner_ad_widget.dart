@@ -36,6 +36,7 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
   bool _loaded = false;
   bool _failed = false;
   AdSize? _size;
+  Orientation? _orientation;
 
   bool get _enabled => !AdFlags.isPremium && AdFlags.adsReady && !AdsId.isOff(_unitId);
 
@@ -45,7 +46,16 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_ad == null && _enabled) _load();
+    // Orientation badle to us width ka naya banner (IPTV banner_widget.dart:81-84).
+    final orientation = MediaQuery.orientationOf(context);
+    if (_orientation != null && _orientation != orientation) {
+      _ad?.dispose();
+      _ad = null;
+      _loaded = false;
+      _failed = false;
+    }
+    _orientation = orientation;
+    if (_ad == null && !_failed && _enabled) _load();
   }
 
   Future<void> _load() async {

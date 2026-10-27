@@ -1,14 +1,17 @@
+import 'dart:ui' show AppLifecycleState;
+
 import 'package:common_flow_demo/google_ads_material/ad_flags.dart';
 import 'package:common_flow_demo/google_ads_material/ad_tap_helper.dart';
 import 'package:common_flow_demo/google_ads_material/ads_id.dart';
 import 'package:common_flow_demo/google_ads_material/app_open_ad_manager.dart';
 import 'package:common_flow_demo/google_ads_material/interstitial_ad_manager.dart';
-import 'package:common_flow_demo/google_ads_material/intro_premium_ads.dart';
 import 'package:common_flow_demo/google_ads_material/native_ad_manager.dart';
+import 'package:common_flow_demo/google_ads_material/native_ad_widget.dart';
 import 'package:common_flow_demo/google_ads_material/remote_config.dart';
 import 'package:common_flow_demo/google_ads_material/rewarded_ad_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 // Pure rules of the ads + Remote Config layer. No SDK call is made: every path tested here
 // returns before google_mobile_ads is touched.
@@ -127,12 +130,12 @@ void main() {
     expect(AdsId.revenueOn('banner'), isFalse);
   });
 
-  test('wait times come from Remote Config, defaults 8 s / 5 s', () {
+  test('wait times come from Remote Config, defaults 8 s / 2 s (IPTV tap loader: fixed 2 s)', () {
     expect(AdsId.splashAdWait, const Duration(seconds: 8));
-    expect(AdsId.inAppAdWait, const Duration(seconds: 5));
+    expect(AdsId.inAppAdWait, const Duration(seconds: 2));
     AdsId.setJson({'splashAdWaitSeconds': '3', 'inAppAdWaitSeconds': 'x'});
     expect(AdsId.splashAdWait, const Duration(seconds: 3));
-    expect(AdsId.inAppAdWait, const Duration(seconds: 5), reason: 'invalid value keeps the default');
+    expect(AdsId.inAppAdWait, const Duration(seconds: 2), reason: 'invalid value keeps the default');
   });
 
   test('Remote Config merge: online wins, missing keys keep defaults, invalid JSON keeps defaults', () {
@@ -152,6 +155,18 @@ void main() {
     AppResumeAdListener.skipNextResume();
     expect(AppResumeAdListener.shouldShowOnForeground(), isFalse, reason: 'back from share / store / ad click');
     expect(AppResumeAdListener.shouldShowOnForeground(), isTrue, reason: 'skip is used once');
+
+    // share sheet closed: the app was only inactive (no background / foreground event) -> the skip is dropped
+    AppResumeAdListener.skipNextResume();
+    AppResumeAdListener.lifecycle(AppLifecycleState.inactive);
+    AppResumeAdListener.lifecycle(AppLifecycleState.resumed);
+    expect(AppResumeAdListener.shouldShowOnForeground(), isTrue, reason: 'next Home -> return after a share sheet');
+    // browser / store: the app was hidden, the skip stays for the foreground event
+    AppResumeAdListener.skipNextResume();
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused, AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      AppResumeAdListener.lifecycle(s);
+    }
+    expect(AppResumeAdListener.shouldShowOnForeground(), isFalse, reason: 'back from the browser');
 
     AppResumeAdListener.block();
     expect(AppResumeAdListener.shouldShowOnForeground(), isFalse, reason: 'premium screen open');
@@ -196,17 +211,54 @@ void main() {
     expect(done, 1);
   });
 
-  test('intro / premium ad: app open id set = app open, else interstitial; nothing loaded = go on at once', () async {
-    AdsId.setJson({'appOpenIntro': '11', 'interIntro': '11'});
+  test('intro ad: appOpenIntro only (no interstitial fallback); "11" or not loaded = go on at once', () {
     var done = 0;
-    IntroPremiumAds.intro.show(onDone: () => done++);
-    expect(done, 1, reason: 'both "11": straight on');
-    AdsId.setJson({'appOpenIntro': 'ca-app-pub-x/1', 'interIntro': '11'});
-    IntroPremiumAds.intro.show(onDone: () => done++);
-    expect(done, 2, reason: 'app open not loaded: no wait');
-    AdsId.setJson({'appOpenPremium': '11', 'interPremium': 'ca-app-pub-x/2'});
-    IntroPremiumAds.premium.show(onDone: () => done++);
-    await Future<void>.delayed(Duration.zero);
-    expect(done, 3, reason: 'interstitial not loaded: no loader, no wait');
+    AdsId.setJson({'appOpenIntro': '11'});
+    AppOpenAdManager.intro.show(onDone: () => done++, preloadAfter: false);
+    expect(done, 1, reason: '"11": straight on');
+    AdsId.setJson({'appOpenIntro': 'ca-app-pub-x/1'});
+    AppOpenAdManager.intro.show(onDone: () => done++, preloadAfter: false);
+    expect(done, 2, reason: 'not loaded: no wait, no loader');
   });
+
+  test('a pinned native is drawn only when the screen keeps minSpaceLeft for its own content (intro: 240 next to the 310 big native)', () {
+    bool fits(double screen) => NativeAdWidget.fitsScreen(screenHeight: screen, adHeight: 310, minSpaceLeft: 240);
+    expect(fits(805), isTrue, reason: 'Samsung M04 portrait window');
+    expect(fits(592), isTrue, reason: 'a 360x640 dp phone with its 48 dp navigation bar outside the window');
+    expect(fits(549), isFalse);
+    expect(fits(384), isFalse, reason: 'Samsung M04 landscape window');
+  });
+
+  test('full-screen callback: openBehind = next screen 1 s after the impression, onDone exactly once', () async {
+    var done = 0, after = 0;
+    final behind = fullScreenCallback<InterstitialAd>(onDone: () => done++, openBehind: true, after: () => after++);
+    behind.onAdShowedFullScreenContent!(_FakeAd());
+    expect(AdFlags.isFullScreenAdShowing, isTrue);
+    behind.onAdImpression!(_FakeAd());
+    expect(done, 0, reason: 'not yet: 1 s after the impression');
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    expect(done, 1, reason: 'the next screen opens behind the ad');
+    behind.onAdDismissedFullScreenContent!(_FakeAd());
+    expect(done, 1, reason: 'closing the ad does not open it again');
+    expect(after, 1);
+    expect(AdFlags.isFullScreenAdShowing, isFalse);
+
+    done = 0;
+    final onClose = fullScreenCallback<InterstitialAd>(onDone: () => done++);
+    onClose.onAdImpression!(_FakeAd());
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    expect(done, 0, reason: 'without openBehind: only when closed');
+    onClose.onAdDismissedFullScreenContent!(_FakeAd());
+    expect(done, 1);
+
+    done = 0;
+    fullScreenCallback<InterstitialAd>(onDone: () => done++, openBehind: true)
+        .onAdFailedToShowFullScreenContent!(_FakeAd(), AdError(0, 'd', 'm'));
+    expect(done, 1, reason: 'failed to show: at once');
+  });
+}
+
+class _FakeAd extends Fake implements InterstitialAd {
+  @override
+  Future<void> dispose() async {}
 }

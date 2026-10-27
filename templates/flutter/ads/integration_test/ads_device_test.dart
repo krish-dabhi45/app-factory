@@ -77,37 +77,89 @@ void main() {
   });
 
   testWidgets('small native (factory smallNative, home) loads with the Remote Config colours', (tester) async {
+    AdsId.setJson({...defaults, 'nativeHome': 'ca-app-pub-3940256099942544/2247696110', 'adShowHomeFlag': '1'}); // IPTV ships nativeHome "11"
     await tester.pumpWidget(app(
-      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 90)]),
+      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 150)]),
     ));
-    expect(find.byType(SmallNativeShimmer), findsOneWidget, reason: 'shimmer while loading');
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0, reason: 'nothing while loading (IPTV)');
     expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 90);
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 150);
     await tester.pump(const Duration(seconds: 2)); // native view drawn, visible in the device window
+  });
+
+  testWidgets('home native is kept: switching tabs away and back shows the same ad, no reload (IPTV nativeAdHome)', (tester) async {
+    AdsId.setJson({...defaults, 'nativeHome': 'ca-app-pub-3940256099942544/2247696110', 'adShowHomeFlag': '1'});
+    var tab = 0;
+    late StateSetter setTab;
+    await tester.pumpWidget(app(StatefulBuilder(builder: (_, s) {
+      setTab = s;
+      return tab == 0
+          ? Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 150)])
+          : const Center(child: Text('Other tab'));
+    })));
+    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
+    final first = tester.widget<AdWidget>(find.byType(AdWidget)).ad;
+    for (var round = 0; round < 3; round++) {
+      setTab(() => tab = 1);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(AdWidget), findsNothing);
+      setTab(() => tab = 0);
+      await tester.pump();
+      expect(tester.getSize(find.byType(NativeAdWidget)).height, 150, reason: 'round $round: shown in the first frame, no reload');
+      expect(identical(tester.widget<AdWidget>(find.byType(AdWidget)).ad, first), isTrue, reason: 'round $round: same ad');
+      await tester.pump(const Duration(seconds: 1));
+    }
   });
 
   testWidgets('big native (factory bigNative, intro) loads with its media view', (tester) async {
     await tester.pumpWidget(app(
-      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 300)]),
+      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 310)]),
     ));
-    expect(find.byType(BigNativeShimmer), findsOneWidget, reason: 'shimmer while loading');
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0, reason: 'nothing while loading (IPTV)');
     expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 300);
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310);
     await tester.pump(const Duration(seconds: 2));
   });
 
-  testWidgets('in-app interstitial: no preloaded ad and wait "0" -> goes on at once, HUD removed', (tester) async {
-    AdsId.setJson({...defaults, 'inAppAdWaitSeconds': '0'});
+  testWidgets('big native with minSpaceLeft: not drawn while the screen is too short (landscape), the same ad back when there is room', (tester) async {
+    var height = 800.0;
+    late StateSetter setHeight;
+    await tester.pumpWidget(app(StatefulBuilder(builder: (context, set) {
+      setHeight = set;
+      return MediaQuery(
+        data: MediaQuery.of(context).copyWith(size: Size(MediaQuery.sizeOf(context).width, height)),
+        child: Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 310, minSpaceLeft: 240)]),
+      );
+    })));
+    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310);
+    setHeight(() => height = 384); // the M04's landscape window: 384 - 310 < 240
+    await tester.pump();
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0);
+    expect(find.byType(AdWidget), findsNothing);
+    setHeight(() => height = 800);
+    await tester.pump(const Duration(seconds: 1));
+    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310, reason: 'the same ad again, no reload');
+    await tester.pump(const Duration(seconds: 2));
+  });
+
+  testWidgets('tap ad: "Loading..." for inAppAdWaitSeconds, an ad that did not load -> goes on, HUD removed', (tester) async {
+    AdsId.useTestIds = false;
+    AdsId.setJson({...defaults, 'interPreLoad': 'ca-app-pub-0000000000000000/0000000000', 'inAppAdWaitSeconds': '1'});
     await tester.pumpWidget(app(const SizedBox.expand()));
     final slot = InterstitialSlot('interPreLoad');
     var done = 0;
     final watch = Stopwatch()..start();
-    final shown = await slot.show(onDone: () => done++, preloadAfter: false);
+    final shown = slot.show(onDone: () => done++, preloadAfter: false, loader: true, openBehind: true);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Loading...'), findsOneWidget, reason: 'IPTV loader before the tap ad');
+    expect(done, 0);
+    expect(await shown, isFalse);
     watch.stop();
     await tester.pump();
-    expect(shown, isFalse);
     expect(done, 1);
-    expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    expect(watch.elapsed, greaterThanOrEqualTo(const Duration(seconds: 1)), reason: 'the loader stays the whole wait');
+    expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
     expect(AppHud.isShowing, isFalse);
   });
 }

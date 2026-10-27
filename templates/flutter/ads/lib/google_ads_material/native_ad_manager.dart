@@ -11,16 +11,21 @@ import 'app_open_ad_manager.dart';
 /// Android MainActivity.kt (LayoutNativeAdFactory.kt + native_small.xml / native_big.xml),
 /// iOS AppDelegate.swift (TemplateNativeAdFactory).
 class NativeFactory {
-  static const small = 'smallNative'; // icon | headline + body | CTA, height 90 (home)
-  static const big = 'bigNative'; // icon + headline + body, media 150, CTA full width, height 300 (intro)
+  // IPTV native_admob_small.xml: row (icon | "Ad" + headline, advertiser + stars, body), CTA full width below, height 150 (home)
+  static const small = 'smallNative';
+  // IPTV intro order: media 150, row (icon | "Ad" + headline, advertiser + stars, body), CTA full width, height 310 (intro)
+  static const big = 'bigNative';
 }
 
 /// Ek native slot, Remote Config key [key] ki id se: preload, aur jo widget le jaye usko de do.
+/// [keep] true (home): ek hi ad rakha jaata hai aur har baar wahi dikhta hai — tab switch / home rebuild par
+/// naya ad load nahi hota (IPTV: static AdsVariable.nativeAdHome). false (intro): widget ad le jaata hai aur dispose karta hai.
 class NativeSlot {
-  NativeSlot(this.key, {required this.factoryId});
+  NativeSlot(this.key, {required this.factoryId, this.keep = false});
 
   final String key;
   final String factoryId;
+  final bool keep;
 
   NativeAd? _ad;
   Future<NativeAd?>? _pending;
@@ -45,9 +50,15 @@ class NativeSlot {
   /// Ready ad le lo, ya load hone ka wait karo (preload na hua ho to yahi load).
   Future<NativeAd?> take() async {
     final ad = _ad ?? await preload();
-    _ad = null; // ek NativeAd ek hi AdWidget me dikh sakta hai
+    if (!keep) _ad = null; // ek NativeAd ek hi AdWidget me dikh sakta hai
     return ad;
   }
+
+  /// [keep] slot ka loaded ad (widget pehle hi frame me dikhata hai, shimmer nahi).
+  NativeAd? get keptAd => keep && !isOff ? _ad : null;
+
+  /// [keep] slot ka ad abhi kisi widget me dikh raha hai (ek NativeAd do AdWidget me ek saath nahi chal sakta).
+  Object? shownBy;
 
   Future<NativeAd?> _load(String id) {
     if (AdsId.isOff(id)) return Future.value(null);
@@ -79,5 +90,5 @@ class NativeAdManager {
   static final intro = NativeSlot('nativeIntroBig', factoryId: NativeFactory.big);
 
   /// Home ke content me ek small native. Gate: adShowHomeFlag.
-  static final home = NativeSlot('nativeHome', factoryId: NativeFactory.small);
+  static final home = NativeSlot('nativeHome', factoryId: NativeFactory.small, keep: true);
 }

@@ -101,8 +101,9 @@ class AdsId {
   static Duration get splashAdWait => _seconds('splashAdWaitSeconds', 8);
 
   // ---------- Interstitial (app ke andar) ----------
-  /// Tap par preloaded interstitial na ho to "Showing Ads..." ke saath max itna wait, phir bina ad aage.
-  static Duration get inAppAdWait => _seconds('inAppAdWaitSeconds', 5);
+  /// Home / tab tap ad se pehle "Loading..." loader itni der (IPTV fixed 2 s, `app_variable.dart:73`);
+  /// tab tak ad ready na ho to bina ad aage.
+  static Duration get inAppAdWait => _seconds('inAppAdWaitSeconds', 2);
 
   /// `homeFlagOnline` "0" = home ke har tap par ad; "1" = har dusre tap par (homeFlag % 2 == 0).
   static bool get homeAdEveryTap => get('homeFlagOnline', '1') == '0';
@@ -111,19 +112,12 @@ class AdsId {
   /// "#RRGGBB", "RRGGBB" ya "AARRGGBB".
   static Map<String, Object> get nativeColors => {
         'nativeBGColor': get('nativeBGColor', '222222'),
-        'btnBgColor1': get('btnBgColor1', 'FFFFFF'), // CTA gradient start
-        'btnBgColor2': get('btnBgColor2', 'FFFFFF'), // CTA gradient end (1 = 2 -> solid)
-        'btnGradientAngle': get('btnGradientAngle', '0'), // 0 = left->right, 90 = bottom->top
-        'btnRadius': get('btnRadius', '30'), // dp / pt
+        'btnBgColor1': get('btnBgColor1', 'FFFFFF'), // CTA gradient, bottom-left (IPTV MainActivity.kt:316-328)
+        'btnBgColor2': get('btnBgColor2', 'FFFFFF'), // CTA gradient, top-right (1 = 2 -> solid); corner 10 fixed
         'btnTextColor': get('btnTextColor', '000000'),
         'headerTextColor': get('headerTextColor', 'FFFFFF'),
         'bodyTextColor': get('bodyTextColor', 'DDDDDD'),
         'btnAdBgColor': get('btnAdBgColor', 'FFB300'), // "Ad" badge
         'btnAdTextColor': get('btnAdTextColor', 'FFFFFF'),
       };
-
-  // ---------- Flow ----------
-  static bool get showRateScreen => isOn('showRateScreen');
-  static bool get showPremiumFirstTime => isOn('showPremiumFirstTime');
-  static bool get showPremiumAfterSplash => isOn('showPremiumAfterSplash');
 }

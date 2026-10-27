@@ -11,6 +11,8 @@
 //                                       changed or deleted since <base>, from git (see changes())
 //   node ads-install.mjs verify <project> <base>   → skills/ads-implementation steps 8.1, 8.2, 8.4 and 9 in one call: each
 //                                       step's result line, on a failure the lines that say why; exit 1 when one fails
+//   … changes|verify … --replaced <file,file,…>  → the app's own ads layer that the wiring removed or rewrote (step 2a);
+//                                       each is proved from <base> and left out of I1–I4, and listed in the report
 //   node ads-install.mjs selftest
 // Template identifiers replaced: `package:common_flow_demo/` → `package:<pubspec name>/`,
 // `package com.demo.common_flow_demo` → the package of the app's MainActivity.kt.
@@ -21,6 +23,8 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 
+const KOTLIN = '2.4.0' // the guide app's org.jetbrains.kotlin.android (android/settings.gradle.kts)
+const olderThan = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false }
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'flutter', 'ads')
 // Google's sample App IDs (developers.google.com/admob/{android,ios}/quick-start): debug builds work; the owner replaces them
 const SAMPLE_APP_ID = { android: 'ca-app-pub-3940256099942544~3347511713', ios: 'ca-app-pub-3940256099942544~1458002511' }
@@ -34,7 +38,6 @@ const DEPS = [
   ['firebase_remote_config', '7.0.0', 'ads/flow values from one JSON key (google_ads_material/remote_config.dart)'],
   ['firebase_analytics', '13.0.0', 'ad revenue event ad_impression (google_ads_material/ad_impression.dart)'],
   ['firebase_crashlytics', '6.0.0', 'crash reports, set after RemoteConfigLoader.load when Firebase is configured (flutter-ads section 3)'],
-  ['shimmer', '4.0.0', 'native ad loading shimmer (google_ads_material/native_ad_widget.dart)'],
   ['purchases_flutter', '10.16.0', 'Premium from the store\'s entitlement (premium_core/premium_store.dart)'],
   ['shared_preferences', '2.5.6', 'free uses per feature and the demo unlock (premium_core/)'],
 ]
@@ -173,6 +176,21 @@ export function install(root, { premium = true } = {}) {
     'facebook-core dependency')
   patch(gradle, (s) => !/minSdk\s*=\s*(\d+)/.test(s) || +s.match(/minSdk\s*=\s*(\d+)/)[1] >= 24,
     (s) => s.replace(/minSdk\s*=\s*\d+/, 'minSdk = 24 // google_mobile_ads'), 'minSdk 24')
+  // firebase_analytics 13 brings play-services-measurement 24.0.0, built with Kotlin 2.4 metadata: an app on the Kotlin
+  // Gradle plugin 2.2.20 failed "binary version of its metadata is 2.4.0, expected version is 2.2.0" (Live Street View,
+  // 2026-10-27). The guide app builds with 2.4.0; an older plugin is raised to it, a newer one is kept.
+  const settingsGradle = 'android/settings.gradle.kts'
+  const kotlinAt = (s) => (s.match(/id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+"([\d.]+)"/) || [])[1]
+  if (fs.existsSync(at(settingsGradle))) patch(settingsGradle, (s) => !kotlinAt(s) || !olderThan(kotlinAt(s), KOTLIN),
+    (s) => s.replace(/(id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+")[\d.]+("[^\n]*)/, `$1${KOTLIN}$2 // firebase_analytics 13 (play-services-measurement 24)`),
+    `Kotlin Gradle plugin ${KOTLIN} (firebase_analytics 13 needs it)`)
+  // Kotlin 2.4 rejects `kotlinOptions { jvmTarget = "…" }` ("Using 'jvmTarget: String' is an error. Please migrate to the
+  // compilerOptions DSL"): moved to the guide app's `kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_n } }`, same JVM
+  const KOTLIN_OPTIONS = /\n[ \t]*kotlinOptions\s*\{\s*\n\s*jvmTarget\s*=\s*(?:JavaVersion\.VERSION_([\d_]+)\.toString\(\)|"([\d.]+)")\s*\n\s*\}[ \t]*\n/
+  patch(gradle, (s) => !KOTLIN_OPTIONS.test(s), (s) => {
+    const m = s.match(KOTLIN_OPTIONS), jvm = m[1] || m[2].replaceAll('.', '_')
+    return `${s.replace(KOTLIN_OPTIONS, '\n').trimEnd()}\n\nkotlin {\n    compilerOptions {\n        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_${jvm}\n    }\n}\n`
+  }, 'kotlinOptions → compilerOptions (Kotlin 2.4)')
 
   // iOS: native factory in AppDelegate.swift (no Xcode project edit), App ID, iOS 15
   const del = 'ios/Runner/AppDelegate.swift'
@@ -231,7 +249,7 @@ const TEST_NAME = /\b(?:testWidgets|test|group|patrolTest)\(\s*(['"])((?:\\.|(?!
 
 // What implementing ads changed in the app, read from git and the files — nothing in it is written by hand: the app's
 // working tree (committed or not, plus untracked files) against <base>, the commit before the ads work.
-export function changes(root, base) {
+export function changes(root, base, replaced = []) {
   const git = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', maxBuffer: 256 << 20 })
   const tpl = templateFiles(root)
   const { name } = ids(root)
@@ -287,14 +305,35 @@ export function changes(root, base) {
   const at = (re) => [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && re.test(l) ? [`${f}:${i + 1}`] : []))
   const present = (id, what, re) => { const w = at(re); check(id, what, w.length ? [] : ['not found in the app\'s own lib/'], w) }
   const { mainPath } = ids(root)
-  const patched = new Set(['pubspec.yaml', 'android/app/src/main/AndroidManifest.xml', 'android/app/build.gradle.kts', 'android/app/src/main/res/values/strings.xml',
+  const patched = new Set(['pubspec.yaml', 'android/settings.gradle.kts', 'android/app/src/main/AndroidManifest.xml', 'android/app/build.gradle.kts', 'android/app/src/main/res/values/strings.xml',
     'ios/Runner/AppDelegate.swift', 'ios/Runner/Info.plist', 'ios/Runner.xcodeproj/project.pbxproj', mainPath && path.relative(root, mainPath)])
   const word = { A: 'added', M: 'changed', D: 'deleted' }
 
+  // --replaced: the app's own ads layer, removed or rewritten on purpose (skills/ads-implementation step 2a). Each path
+  // is proved from <base>: it imports an ads SDK or another replaced file, or (lib/) only replaced files import it.
+  // Proved files are left out of I1, I2 and I4, and their tests out of I3's "no longer runs"; the report lists them.
+  const SDK = /^import\s+['"]package:(google_mobile_ads|applovin_max|unity_ads_plugin|facebook_audience_network|easy_audience_network|ironsource_mediation)\//m
+  const atBase = (f) => { try { return git('show', `${base}:${f}`) } catch { return null } }
+  const baseLib = replaced.length ? git('ls-tree', '-r', '--name-only', base, '--', 'lib').split('\n').filter((f) => f.endsWith('.dart')) : []
+  const imports = (from, s, to) => [...s.matchAll(/^import\s+['"]([^'"]+)['"]/gm)].some(([, i]) => i.startsWith('package:')
+    ? i === `package:${name}/${to.replace(/^lib\//, '')}` : path.posix.normalize(path.posix.join(path.posix.dirname(from), i)) === to)
+  const why = new Map(), badReplaced = []
+  for (const f of new Set(replaced)) {
+    const s = atBase(f), others = replaced.filter((o) => o !== f)
+    if (s === null) { badReplaced.push(`--replaced \`${f}\` is not in ${base}`); continue }
+    const dep = others.find((o) => imports(f, s, o))
+    const users = /^lib\//.test(f) ? baseLib.filter((u) => u !== f && imports(u, atBase(u), f)) : []
+    if (SDK.test(s)) why.set(f, 'imports an ads SDK')
+    else if (dep) why.set(f, `imports \`${dep}\``)
+    else if (users.length && users.every((u) => replaced.includes(u))) why.set(f, `only ${users.map((u) => `\`${u}\``).join(', ')} import it`)
+    else badReplaced.push(`--replaced \`${f}\` imports no ads SDK and no replaced file${users.length ? `, and is also imported by ${users.filter((u) => !replaced.includes(u)).map((u) => `\`${u}\``).join(', ')}` : ''}`)
+  }
+  const kept = own.filter(([f]) => !why.has(f))
+
   check('I1', 'Only files the ads work owns were touched: the template\'s, the native files and pubspec the installer patches, lib/, test/, integration_test/, CONTRACT.md',
-    own.filter(([f]) => !patched.has(f) && !/^(lib|test|integration_test)\//.test(f) && f !== 'CONTRACT.md').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`))
+    [...badReplaced, ...kept.filter(([f]) => !patched.has(f) && !/^(lib|test|integration_test)\//.test(f) && f !== 'CONTRACT.md').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`)])
   check('I2', 'No test that existed before was changed or deleted',
-    own.filter(([f, x]) => /^(test|integration_test)\//.test(f) && x.status !== 'A').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`))
+    kept.filter(([f, x]) => /^(test|integration_test)\//.test(f) && x.status !== 'A').map(([f, x]) => `\`${f}\` ${word[x.status] || x.status}`))
   const inApp = (p) => { // a path from a test report, relative to the app — also when the report was recorded in another folder
     const r = path.relative(root, p); if (!r.startsWith('..')) return r
     const parts = p.split(path.sep)
@@ -315,7 +354,7 @@ export function changes(root, base) {
   const before = run(TESTS_BEFORE), after = run(TESTS_AFTER)
   check('I3', `Every test that passed before the ads work passes now${before && after ? ` (${before.passed.size} passed before; ${after.passed.size} of ${after.all.size} pass now)` : ''}`,
     !before || !after ? [`\`.dart_tool/${!before ? TESTS_BEFORE : TESTS_AFTER}\` is missing: run the suite with \`--file-reporter json:.dart_tool/${!before ? TESTS_BEFORE : TESTS_AFTER}\``]
-      : [...before.passed].filter((t) => !after.passed.has(t)).map((t) => `${t} — ${after.all.has(t) ? 'fails now' : 'no longer runs'}`),
+      : [...before.passed].filter((t) => !after.passed.has(t) && (after.all.has(t) || !why.has(t.split(': ')[0]))).map((t) => `${t} — ${after.all.has(t) ? 'fails now' : 'no longer runs'}`),
     before && before.all.size > before.passed.size ? [`${before.all.size - before.passed.size} failed or were skipped already before the ads work`] : [])
   const ALLOW_IMPORT = /^import\s+['"][^'"]*google_ads_material\/(ad_flags|ads_id|app_open_ad_manager)\.dart['"]\s*;/
   // the diff with /* … */ blanked on both sides: commented-out code is neither gained nor lost, code put inside /* */ is lost
@@ -323,15 +362,29 @@ export function changes(root, base) {
     const t = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-live-')), a = path.join(t, 'before'), b = path.join(t, 'now')
     fs.writeFileSync(a, x.status === 'A' ? '' : blankBlockComments(git('show', `${base}:${f}`)))
     fs.writeFileSync(b, blankBlockComments(read(path.join(root, f))))
-    let d = ''; try { git('diff', '--no-index', a, b) } catch (e) { d = e.stdout }
+    // -w: a line only re-indented (moved into a block) is neither lost nor gained
+    let d = ''; try { git('diff', '--no-index', '-w', a, b) } catch (e) { d = e.stdout }
     fs.rmSync(t, { recursive: true, force: true })
     return d.split('\n').filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join('\n')
   }
   const ALLOW_CALL = /^(AppResumeAdListener\.skipNextResume\(\)|AdFlags\.isPremium\s*=\s*(true|false)|AdsId\.disableAllAds\(\))\s*;\s*(\/\/.*)?$/
   check('I4', 'The backend (lib/data/, lib/domain/) keeps every line it had and gains only imports of ad_flags.dart, ads_id.dart or app_open_ad_manager.dart and the calls skipNextResume(), AdFlags.isPremium = …, AdsId.disableAllAds() (flutter-ads section 7)',
-    own.filter(([f]) => /^lib\/(data|domain)\//.test(f)).flatMap(([f, x]) => x.status === 'D' ? [`\`${f}\` deleted`] : [
-      ...lines(liveDiff(f, x), '-').map((l) => `\`${f}\` lost \`${l}\``),
-      ...lines(liveDiff(f, x), '+').filter((l) => !/^\/\//.test(l) && !ALLOW_IMPORT.test(l) && !ALLOW_CALL.test(l)).map((l) => `\`${f}\` gained \`${l}\``)]))
+    kept.filter(([f]) => /^lib\/(data|domain)\//.test(f)).flatMap(([f, x]) => {
+      if (x.status === 'D') return [`\`${f}\` deleted`]
+      const d = liveDiff(f, x), lost = lines(d, '-'), gained = lines(d, '+'), okGained = new Set()
+      // `head => tail` turned into `head { skipNextResume(); return tail` … `}` so skipNextResume() can go first (P6):
+      // the same declaration and the same call, nothing else
+      const okLost = new Set(gained.some((l) => ALLOW_CALL.test(l)) ? lost.filter((l) => {
+        const m = l.match(/^(.*\))\s*(?:async\s*)?=>\s*(.+)$/); if (!m) return false
+        const open = gained.find((g) => g === `${m[1]} {` || g === `${m[1]} async {`)
+        const body = gained.find((g) => [`return ${m[2]}`, `await ${m[2]}`, m[2]].includes(g))
+        if (!open || !body) return false
+        okGained.add(open); okGained.add(body); return true
+      }) : [])
+      if (okLost.size) okGained.add('}')
+      return [...lost.filter((l) => !okLost.has(l)).map((l) => `\`${f}\` lost \`${l}\``),
+        ...gained.filter((l) => !/^\/\//.test(l) && !ALLOW_IMPORT.test(l) && !ALLOW_CALL.test(l) && !okGained.has(l)).map((l) => `\`${f}\` gained \`${l}\``)]
+    }))
   const pubNow = fs.existsSync(path.join(root, 'pubspec.yaml')) ? read(path.join(root, 'pubspec.yaml')) : ''
   const basePub = own.some(([f, x]) => f === 'pubspec.yaml' && x.status === 'M') ? git('show', `${base}:pubspec.yaml`).replaceAll('\r\n', '\n') : ''
   const oldOverride = new Set((basePub.match(OVERRIDES)?.[1] || '').split('\n').map((l) => l.trim()))
@@ -360,17 +413,45 @@ export function changes(root, base) {
   })
   check('P2', `Startup runs the pattern's steps in this order in one file: ${steps.join(' → ')}… (flutter-ads section 3)`,
     ordered.length ? [] : steps.map((s) => `${s}: ${at(new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replaceAll("'", '[\'"]'))).join(', ') || 'not found'}`), ordered)
-  present('P3', 'The ads\' "Showing Ads..." loader has its navigator: AppHud.navigatorKey', /AppHud\.navigatorKey/)
+  present('P3', 'The ads\' "Loading..." loader has its navigator: AppHud.navigatorKey', /AppHud\.navigatorKey/)
   present('P4', 'Home turns the resume app open ad on: AppResumeAdListener.enabled = true', /AppResumeAdListener\.enabled\s*=\s*true/)
   present('P5', 'Home feature taps go through the home tap rule: AdTapHelper.onHomeTap(', /AdTapHelper\.onHomeTap\(/)
-  const LEAVE = /\b(openAppSettings|launchUrl|launchUrlString|pickImage|pickMultiImage|pickVideo|pickMedia|pickMultipleMedia|pickFiles|getDirectoryPath|saveFile|requestReview|openStoreListing|buyNonConsumable|buyConsumable|restorePurchases)\s*\(|\b(Share|SharePlus\.instance)\.share\w*\s*\(/
-  const leaves = [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && LEAVE.test(l) ? [[f, i, ls.slice(Math.max(0, i - 3), i + 1).findLastIndex((p) => /skipNextResume\(\)/.test(p))]] : []))
+  // IPTV: switching tabs never shows an ad (its tab bar only sets currentPageIndex, home_screen.dart:201)
+  const TAB = /onDestinationSelected|BottomNavigationBar|NavigationBar\(|TabBar\(|onTabChanged|goBranch\(|currentPageIndex|currentIndex\s*=|selectedIndex\s*=|tabController|\.animateTo\(|(?<!\b(?:final|var|const|late|int|num|bool|String|Widget|List<[^>]*>|Map<[^>]*>)\s+)\b_?(tab|index|page)\w*\s*=(?!=)/i // an assignment, not a declaration (`final tabs = [` holds the tab pages)
+  check('P16', 'No ad on a tab switch: AdTapHelper.onHomeTap( is not in a tab bar / tab change handler (its line or the 3 lines before) and never wraps a tab change (flutter-ads section 2)',
+    [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && /AdTapHelper\.onHomeTap\(/.test(l) && ls.slice(Math.max(0, i - 3), i + 1).some((p) => code(p) && TAB.test(p))
+      ? [`${f}:${i + 1} \`${l.trim()}\``] : [])))
+  // consent can be changed later: IPTV setting_screen.dart:127-141, the guide app setting_screen.dart:15,50
+  check('P17', 'A privacy options entry: AdsConsent.isPrivacyOptionsRequired decides whether it shows and AdsConsent.showPrivacyOptions opens the form (an old row on the app\'s former consent code is pointed at these, not commented out — flutter-ads section 5)',
+    ['isPrivacyOptionsRequired', 'showPrivacyOptions'].filter((m) => !at(new RegExp(`AdsConsent\\.${m}\\b`)).length).map((m) => `AdsConsent.${m}: not found in the app's own lib/`),
+    at(/AdsConsent\.(isPrivacyOptionsRequired|showPrivacyOptions)\b/))
+  // the app's own ad-tap counter (IPTV AdsVariable.homeFlag, bumped in 5 screens' back handlers): AdTapHelper replaces it.
+  // A camelCase name that starts with an ad word: homeFlag, adCount, interCounter — not uploadCount / addressCount
+  const CTR = String.raw`(?<!AdFlags\.)\b_?(?:ads?|inter(?:stitial)?|home|click)(?:[A-Z]\w*)?(?:Flag|Count|Counter)\b`
+  const OLD_COUNTER = new RegExp(`${CTR}\\s*(?:\\+\\+|\\+=)|\\+\\+\\s*(?:\\w+\\.)?${CTR}`)
+  check('P18', 'The app\'s old ad-tap counter is gone: no `++` / `+=` on a name like homeFlag, adCount, interCount, clickCount in the app\'s own lib/ — AdFlags.homeFlag and AdTapHelper\'s return rule are the only counter (flutter-ads section 2)',
+    [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && OLD_COUNTER.test(l) ? [`${f}:${i + 1} \`${l.trim()}\``] : [])))
+  // not restorePurchases: it leaves no app (Android: a query; iOS: at most a sign-in alert), a skip there eats the next resume ad
+  const LEAVE = /\b(openAppSettings|launchUrl|launchUrlString|pickImage|pickMultiImage|pickVideo|pickMedia|pickMultipleMedia|pickFiles|getDirectoryPath|saveFile|requestReview|openStoreListing|buyNonConsumable|buyConsumable)\s*\(|\b(Share|SharePlus\.instance)\.share\w*\s*\(/
+  // an app method whose first lines call skipNextResume() covers its own callers and same-named wrappers (`_vm.x()`,
+  // `Future<void> x() => _loc.x();`); an SDK call (capitalised receiver, `Geolocator.openAppSettings()`) or a bare call never is
+  const covered = new Set([...src].flatMap(([, ls]) => ls.flatMap((l, i) => {
+    const m = code(l) && l.match(/^\s*(?:static\s+)?[\w<>?, ]+\s+(\w+)\s*\([^)]*\)\s*(?:async\s*)?\{\s*$/)
+    return m && ls.slice(i + 1, i + 3).some((n) => /AppResumeAdListener\.skipNextResume\(\)/.test(n)) ? [m[1]] : []
+  })))
+  const throughCovered = (l) => [...l.matchAll(new RegExp(LEAVE.source, 'g'))].every((m) => {
+    const name = m[0].replace(/\s*\($/, ''), before = l.slice(0, m.index)
+    return covered.has(name) && (/\b[a-z_]\w*(?:\.\w+)*\.\s*$/.test(before) || /^\s*(?:static\s+)?[\w<>?, ]+\s+$/.test(before))
+  })
+  const leaves = [...src].flatMap(([f, ls]) => ls.flatMap((l, i) => code(l) && LEAVE.test(l) && !throughCovered(l) ? [[f, i, ls.slice(Math.max(0, i - 3), i + 1).findLastIndex((p) => /skipNextResume\(\)/.test(p))]] : []))
   const callName = (f, i) => src.get(f)[i].match(LEAVE)[0].replace(/\s*\($/, '')
   check('P6', 'Every call that leaves the app (picker, Settings, browser, share, review, store, purchase) has AppResumeAdListener.skipNextResume() on one of the 3 lines before it (flutter-ads section 3)',
     leaves.filter(([, , k]) => k < 0).map(([f, i]) => `${f}:${i + 1} \`${callName(f, i)}\` has no skipNextResume() before it`),
     leaves.map(([f, i, k]) => `${f}:${i + 1} \`${callName(f, i)}\` — skipNextResume() at line ${Math.max(0, i - 3) + k + 1}`))
-  check('P7', 'No banner on a screen with a text field (flutter-ads section 2)',
-    [...src].filter(([, ls]) => ls.some((l) => code(l) && /BannerAdWidget\(/.test(l)) && ls.some((l) => code(l) && /\b(TextField|TextFormField|CupertinoTextField)\(/.test(l))).map(([f]) => `${f} has BannerAdWidget and a text field`))
+  // a search box on a list is not a form: IPTV's Channels tab has one (channels_screen.dart:68, "Search Channels...") and the banner (:135)
+  const formField = (ls) => ls.some((l, i) => code(l) && /\b(TextField|TextFormField|CupertinoTextField)\(/.test(l) && !ls.slice(i, i + 10).some((n) => /search/i.test(n)))
+  check('P7', 'No banner on a screen with a text field — a search field (its controller, hint or handler says "search") does not count (flutter-ads section 2)',
+    [...src].filter(([, ls]) => ls.some((l) => code(l) && /BannerAdWidget\(/.test(l)) && formField(ls)).map(([f]) => `${f} has BannerAdWidget and a text field`))
   check('P9', 'Every screen that blocks the resume ad (Premium) unblocks it: AppResumeAdListener.block() with unblock() (flutter-ads section 3)',
     [...src].filter(([, ls]) => ls.some((l) => code(l) && /AppResumeAdListener\.block\(\)/.test(l)) && !ls.some((l) => code(l) && /AppResumeAdListener\.unblock\(\)/.test(l))).map(([f]) => `${f} calls block() but never unblock()`))
   const crash = at(/FlutterError\.onError\s*=\s*FirebaseCrashlytics\.instance\.recordFlutterFatalError/)
@@ -424,6 +505,8 @@ export function changes(root, base) {
     '',
     ...checks.flatMap(([ok, id, what, ev]) => [`- **${ok ? 'PASS' : 'FAIL'}** ${id} ${what}`, ...ev.map((e) => `  - ${e}`)]),
     '',
+    ...(why.size ? [`## Replaced: the app's own ads layer (--replaced, proved from ${head.split(' ')[0]})`, '',
+      ...[...why].map(([f, w]) => `- \`${f}\` ${word[files.get(f)?.status] || 'unchanged'} — ${w}`), ''] : []),
     `## Installed from the template`,
     '',
     ...fromTpl.map(([f]) => `- \`${f}\`${differ.some(([d]) => d === f) ? ' — **differs from the template**' : ''}`),
@@ -514,6 +597,9 @@ function changesSelftest() {
     + 'dependency_overrides:\n  # iOS (Swift Package Manager): google_mobile_ads 9.1.0 declares iOS 13, webview_flutter_wkwebview 3.27.1+ iOS 15.\n  webview_flutter_wkwebview: ">=3.23.0 <3.27.1"\n')
   w('.gitignore', '.dart_tool/\n')
   w('lib/main.dart', "import 'package:flutter/material.dart';\n\nvoid main() => runApp(const MaterialApp(home: Text('home')));\n")
+  w('lib/ui/home_tabs.dart', "final tabs = [\n  ListTile(onTap: () => AdTapHelper.onHomeTap(() => open())),\n];\n") // a list named tabs is not a tab change
+  w('lib/data/share.dart', "class Sharer {\n  Future<void> share(String t) => SharePlus.instance.share(ShareParams(text: t));\n  Future<void> png(P p) => SharePlus.instance.share(\n    ShareParams(files: [p]),\n  );\n}\n") // expression bodies, before the ads work
+  w('lib/data/settings_opener.dart', "class Opener {\n  Future<void> openAppSettings() => Geolocator.openAppSettings();\n}\n")
   w('lib/data/picker.dart', "import 'package:image_picker/image_picker.dart';\n\nclass Picker {\n  Future<void> pick() async {\n    await ImagePicker().pickImage(source: ImageSource.gallery);\n  }\n}\n")
   w('test/app_test.dart', "void main() {\n  testWidgets('home opens', (t) async {});\n}\n")
   w('lib/untouched.dart', '// not part of the ads work\n')
@@ -533,6 +619,11 @@ function changesSelftest() {
   w('lib/domain/rule.dart', 'int rule() => 1;\n/*\nint old() => 2;\n*/\n')
   w('lib/main.dart', "import 'package:flutter/material.dart';\nimport 'package:my_app/google_ads_material/banner_ad_widget.dart';\n\nFuture<void> main() async {\n  await RemoteConfigLoader.load('my_app_v1');\n  if (RemoteConfigState.firebaseReady) {\n    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;\n    PlatformDispatcher.instance.onError = (error, stack) {\n      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);\n      return true;\n    };\n  }\n  await FacebookInit.init();\n  await SplashAds.run(isFirstTime: false);\n  SplashAds.afterSplash();\n  runApp(MaterialApp(navigatorKey: AppHud.navigatorKey, home: Column(children: [Text('home'), BannerAdWidget()])));\n  AppResumeAdListener.enabled = true;\n  AdTapHelper.onHomeTap(() {});\n}\n")
   w('lib/data/picker.dart', "import 'package:image_picker/image_picker.dart';\nimport '../google_ads_material/app_open_ad_manager.dart';\n\nclass Picker {\n  Future<void> pick() async {\n    AppResumeAdListener.skipNextResume(); // no app open ad on the way back\n    await ImagePicker().pickImage(source: ImageSource.gallery);\n  }\n}\n")
+  w('lib/data/share.dart', "import '../google_ads_material/app_open_ad_manager.dart';\n\nclass Sharer {\n  Future<void> share(String t) async {\n    AppResumeAdListener.skipNextResume();\n    return SharePlus.instance.share(ShareParams(text: t));\n  }\n  Future<void> png(P p) async {\n    AppResumeAdListener.skipNextResume();\n    await SharePlus.instance.share(\n      ShareParams(files: [p]),\n    );\n  }\n}\n") // was `=> …`, re-indented inside the block (I4 accepts it)
+  w('lib/data/settings_opener.dart', "import '../google_ads_material/app_open_ad_manager.dart';\n\nclass Opener {\n  Future<void> openAppSettings() async {\n    AppResumeAdListener.skipNextResume();\n    await Geolocator.openAppSettings();\n  }\n}\n")
+  w('lib/ui/settings_vm.dart', "class Vm {\n  Future<void> openAppSettings() => _opener.openAppSettings();\n  void tap() => _vm.openAppSettings();\n}\n") // wrappers: covered
+  w('lib/ui/channels.dart', "Widget channels() => Scaffold(\n  body: TextField(\n    controller: searchController,\n  ),\n  bottomNavigationBar: const BannerAdWidget(),\n);\n") // P7: a search box is not a form
+  w('lib/ui/settings.dart', "Widget privacy(bool required) => required ? ListTile(onTap: AdsConsent.showPrivacyOptions) : const SizedBox();\nFuture<bool> need() => AdsConsent.isPrivacyOptionsRequired;\nvoid upload() {\n  uploadCount++;\n  addressCount += 1;\n}\n") // P18: not ad counters
   w('test/ads_wiring_test.dart', "void main() {\n  testWidgets('AC47 home shows the banner', (t) async {});\n  test('AC48 another user\\'s profile', () {});\n}\n")
   fs.appendFileSync(path.join(root, 'lib/google_ads_material/ad_flags.dart'), '// app addition\n')
   w('pubspec.lock', lockOf())
@@ -551,14 +642,14 @@ function changesSelftest() {
   assert.match(r, /\| `android\/app\/src\/main\/AndroidManifest\.xml` \| changed \|/)
   assert.match(r, /\| `test\/ads_wiring_test\.dart` \| added \| 4 \| 0 \|/)
   assert.match(r, /- lib\/main\.dart:16: `runApp\(MaterialApp\(navigatorKey: AppHud\.navigatorKey, home: Column\(children: \[Text\('home'\), BannerAdWidget\(\)\]\)\)\);`/)
-  assert.match(r, /- 9 lines in the app's own code use the ads layer/, 'import lines name no class; lib/google_ads_material/ itself is not counted')
+  assert.match(r, /- 16 lines in the app's own code use the ads layer/, 'import lines name no class; lib/google_ads_material/ itself is not counted')
   assert.match(r, /## Tests added\n\n- test\/ads_wiring_test\.dart: AC47 home shows the banner\n- test\/ads_wiring_test\.dart: AC48 another user's profile\n/, 'an escaped quote does not cut the name')
   assert.match(r, /## Regenerated by flutter pub get\n\n- `linux\/flutter\/generated_plugin_registrant\.cc` \(\+1 −0\)\n- `pubspec\.lock` \(\+\d+ −0\)/)
   assert.doesNotMatch(r, /### `pubspec\.lock`/, 'generated files are not printed')
   assert.doesNotMatch(r, /untouched\.dart|\.dart_tool/, 'a file the ads work did not touch is not listed')
   assert.doesNotMatch(r, /### `lib\/google_ads_material\/banner_ad_widget\.dart`/, 'an identical template file is listed, not printed')
   // the checks, on an app wired as the pattern says
-  assert.match(r, /- Checks: 19 passed, 0 failed\n/)
+  assert.match(r, /- Checks: 22 passed, 0 failed\n/)
   assert.match(r, /\*\*PASS\*\* I5 /, 'google_mobile_ads ^9.1.0 → 9.2.0 and the old override → 3.27.2 are the pattern, not a broken package')
   assert.doesNotMatch(r, /lib\/ui\/old\.dart:/, 'code inside /* */ is not checked')
   assert.doesNotMatch(r, /\*\*FAIL\*\*/)
@@ -568,6 +659,7 @@ function changesSelftest() {
   assert.match(r, /\*\*PASS\*\* P10 .*\n  - lib\/main\.dart:7\n/)
   assert.match(r, /\*\*PASS\*\* P12 .*\n  - lib\/main\.dart:5\n/)
   assert.match(r, /\*\*PASS\*\* P6 .*\n  - lib\/data\/picker\.dart:7 `pickImage` — skipNextResume\(\) at line 6\n/)
+  assert.match(r, /\*\*PASS\*\* P17 .*\n  - lib\/ui\/settings\.dart:1\n  - lib\/ui\/settings\.dart:2\n/)
   // the same test report recorded in another folder (the app was copied or moved after step 1): still matched
   const beforeJson = path.join(root, '.dart_tool', TESTS_BEFORE), recorded = read(beforeJson)
   fs.writeFileSync(beforeJson, recorded.replaceAll(JSON.stringify(root).slice(1, -1), '/elsewhere/old-copy'))
@@ -606,10 +698,15 @@ function changesSelftest() {
   w('lib/main.dart', "import 'package:flutter/material.dart';\n\nFuture<void> main() async {\n  if (!await checkConnectivity()) return;\n  await FacebookInit.init();\n  await RemoteConfigLoader.load('my_app_v1');\n  await SplashAds.run(isFirstTime: false);\n  SplashAds.afterSplash();\n  runApp(const MaterialApp(home: Text('home')));\n}\n")
   w('lib/ui/form.dart', "Widget form() => Scaffold(body: TextField(), bottomNavigationBar: const BannerAdWidget());\n")
   w('lib/ui/share.dart', "final g = 'assets/*';\nvoid share() {\n  Share.share('hi');\n}\n/* x */\n")
+  w('lib/ui/settings_vm.dart', "class Vm {\n  Future<void> openAppSettings() => _opener.openAppSettings();\n  void raw() => Geolocator.openAppSettings();\n}\n") // an SDK call: not covered
   w('lib/domain/rule.dart', '/*\nint rule() => 1;\n*/\n')
   w('lib/ui/premium.dart', "void initState() {\n  AppResumeAdListener.block();\n}\nbool premium(info) => info.activeSubscriptions.toString().contains('week');\n")
+  w('lib/ui/settings.dart', "/*if (required) {\n  ListTile(onTap: AdsConsent.showPrivacyOptions);\n}*/\nFuture<bool> need() => AdsConsent.isPrivacyOptionsRequired;\n") // the row commented out
+  w('lib/ui/old_counter.dart', "void onPop(bool didPop) {\n  if (didPop && AdsVariable.homeFlag.isOdd) {\n    AdsVariable.homeFlag++;\n  }\n  ++adCount;\n  AdFlags.homeFlag++;\n}\n") // the old counter left in a back handler
+  w('lib/data/share.dart', "import '../google_ads_material/app_open_ad_manager.dart';\n\nclass Sharer {\n  Future<void> share(String t) async {\n    AppResumeAdListener.skipNextResume();\n    return SharePlus.instance.share(ShareParams(text: 'x'));\n  }\n  Future<void> png(P p) async {\n    AppResumeAdListener.skipNextResume();\n    await SharePlus.instance.share(\n      ShareParams(files: [p]),\n    );\n  }\n}\n") // the call changed too
+  w('lib/ui/tabs.dart', "Widget bar() => NavigationBar(\n  onDestinationSelected: (i) => AdTapHelper.onHomeTap(() => setTab(i)),\n);\n")
   const x = changes(root, base)
-  assert.match(x, /- Checks: 0 passed, 19 failed \(I1, I2, I3, I4, I5, P1, P2, P3, P4, P5, P6, P7, P9, P10, P11, P12, P13, P14, P15\)\n/)
+  assert.match(x, /- Checks: 1 passed, 21 failed \(I1, I2, I3, I4, I5, P1, P2, P3, P4, P16, P17, P18, P6, P7, P9, P10, P11, P12, P13, P14, P15\)\n/)
   for (const ev of [
     /\*\*FAIL\*\* I1 .*\n  - `functions\/index\.js` added\n/,
     /\*\*FAIL\*\* I2 .*\n  - `test\/app_test\.dart` changed\n/,
@@ -628,31 +725,86 @@ function changesSelftest() {
     /\*\*FAIL\*\* P14 .*\n  - google_mobile_ads 9\.1\.0 \(tested: 9\.2\.0\)\n  - webview_flutter_wkwebview 3\.27\.1 \(tested: 3\.27\.2, flutter-ads section 1\)\n/,
     /\*\*FAIL\*\* P15 .*\n  - Info\.plist has no NSUserTrackingUsageDescription\n/,
     /\*\*FAIL\*\* P3 .*\n  - not found in the app's own lib\/\n/,
-    /\*\*FAIL\*\* P6 .*\n  - lib\/ui\/share\.dart:3 `Share\.share` has no skipNextResume\(\) before it\n/,
+    /\*\*FAIL\*\* P6 .*\n  - lib\/ui\/settings_vm\.dart:3 `openAppSettings` has no skipNextResume\(\) before it\n  - lib\/ui\/share\.dart:3 `Share\.share` has no skipNextResume\(\) before it\n/,
     /  - `lib\/domain\/rule\.dart` lost `int rule\(\) => 1;`\n/,
+    /  - `lib\/data\/share\.dart` lost `Future<void> share\(String t\) => SharePlus\.instance\.share\(ShareParams\(text: t\)\);`\n  - `lib\/data\/share\.dart` gained `Future<void> share\(String t\) async \{`\n  - `lib\/data\/share\.dart` gained `return SharePlus\.instance\.share\(ShareParams\(text: 'x'\)\);`\n  - `lib\/domain/,
     /  - lost `webview_flutter_wkwebview: \^3\.20\.0 # the app's own`\n/,
     /\*\*FAIL\*\* P7 .*\n  - lib\/ui\/form\.dart has BannerAdWidget and a text field\n/,
     /\*\*FAIL\*\* P9 .*\n  - lib\/ui\/premium\.dart calls block\(\) but never unblock\(\)\n/,
+    /\*\*FAIL\*\* P17 .*\n  - AdsConsent\.showPrivacyOptions: not found in the app's own lib\/\n/,
+    /\*\*FAIL\*\* P18 .*\n  - lib\/ui\/old_counter\.dart:3 `AdsVariable\.homeFlag\+\+;`\n  - lib\/ui\/old_counter\.dart:5 `\+\+adCount;`\n/,
+    /\*\*FAIL\*\* P16 .*\n  - lib\/ui\/tabs\.dart:2 `onDestinationSelected: \(i\) => AdTapHelper\.onHomeTap\(\(\) => setTab\(i\)\),`\n/,
   ]) assert.match(x, ev)
   fs.rmSync(root, { recursive: true, force: true })
   return 'changes selftest ok'
 }
 
+// --replaced: an app's own ads layer (an SDK file, a rule only it uses, a screen that imports it, its test) is proved
+// from <base> and left out of I1–I4; an unrelated file is refused; without --replaced the same removal fails I2–I4
+function replacedSelftest() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-replaced-'))
+  const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), s) }
+  const g = (...a) => execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' })
+  const run = (suites) => suites.flatMap(([file, tests], s) => [{ type: 'suite', suite: { id: s, path: path.join(root, file) } },
+    ...tests.flatMap((name, i) => [{ type: 'testStart', test: { id: s * 100 + i, name, suiteID: s } }, { type: 'testDone', testID: s * 100 + i, result: 'success', skipped: false, hidden: false }])])
+    .map((e) => JSON.stringify(e)).join('\n') + '\n'
+  fixture(w)
+  w('pubspec.yaml', 'name: my_app\nenvironment:\n  sdk: ^3.13.5\ndependencies:\n  flutter:\n    sdk: flutter\n')
+  w('lib/data/old_ads.dart', "import 'package:google_mobile_ads/google_mobile_ads.dart';\nimport '../domain/old_rules.dart';\n\nclass OldAds {}\n")
+  w('lib/domain/old_rules.dart', 'bool mayShow() => true;\n')
+  w('lib/domain/rule.dart', 'int rule() => 1;\n')
+  w('lib/ui/old_dialog.dart', "import 'package:my_app/data/old_ads.dart';\n\nvoid showOld() {}\n")
+  w('lib/main.dart', "import 'ui/old_dialog.dart';\nimport 'domain/rule.dart';\n\nvoid main() => showOld();\n")
+  w('test/old_ads_test.dart', "import 'package:my_app/data/old_ads.dart';\n\nvoid main() {\n  test('old ad shows', () {});\n}\n")
+  w('test/app_test.dart', "void main() {\n  test('home opens', () {});\n}\n")
+  w('.gitignore', '.dart_tool/\n')
+  g('init', '-q'); g('add', '-A'); g('commit', '-q', '-m', 'app with its own ads')
+  const base = g('rev-parse', 'HEAD').trim()
+  w(`.dart_tool/${TESTS_BEFORE}`, run([['test/app_test.dart', ['home opens']], ['test/old_ads_test.dart', ['old ad shows']]]))
+  for (const f of ['lib/data/old_ads.dart', 'lib/domain/old_rules.dart', 'lib/ui/old_dialog.dart', 'test/old_ads_test.dart', 'lib/domain/rule.dart']) fs.rmSync(path.join(root, f))
+  w('lib/main.dart', "void main() {}\n")
+  w(`.dart_tool/${TESTS_AFTER}`, run([['test/app_test.dart', ['home opens']]]))
+  const layer = ['lib/data/old_ads.dart', 'lib/domain/old_rules.dart', 'lib/ui/old_dialog.dart', 'test/old_ads_test.dart']
+  const ok = changes(root, base, layer)
+  assert.match(ok, /## Replaced: the app's own ads layer \(--replaced, proved from \w+\)\n\n- `lib\/data\/old_ads\.dart` deleted — imports an ads SDK\n- `lib\/domain\/old_rules\.dart` deleted — only `lib\/data\/old_ads\.dart` import it\n- `lib\/ui\/old_dialog\.dart` deleted — imports `lib\/data\/old_ads\.dart`\n- `test\/old_ads_test\.dart` deleted — imports `lib\/data\/old_ads\.dart`\n/)
+  for (const id of ['I1', 'I2', 'I3']) assert.match(ok, new RegExp(`\\*\\*PASS\\*\\* ${id} `))
+  assert.match(ok, /\*\*FAIL\*\* I4 .*\n  - `lib\/domain\/rule\.dart` deleted\n(?!  - `lib\/(data\/old_ads|domain\/old_rules))/, 'an unrelated backend file is still the app\'s: its loss fails')
+  const bad = changes(root, base, [...layer, 'lib/domain/rule.dart'])
+  assert.match(bad, /\*\*FAIL\*\* I1 .*\n  - --replaced `lib\/domain\/rule\.dart` imports no ads SDK and no replaced file, and is also imported by `lib\/main\.dart`\n/)
+  const none = changes(root, base)
+  assert.match(none, /\*\*FAIL\*\* I2 .*\n  - `test\/old_ads_test\.dart` deleted\n/)
+  assert.match(none, /\*\*FAIL\*\* I3 .*\n  - test\/old_ads_test\.dart: old ad shows — no longer runs\n/)
+  assert.match(none, /\*\*FAIL\*\* I4 .*\n  - `lib\/data\/old_ads\.dart` deleted\n  - `lib\/domain\/old_rules\.dart` deleted\n  - `lib\/domain\/rule\.dart` deleted\n/)
+  assert.doesNotMatch(none, /## Replaced/)
+  fs.rmSync(root, { recursive: true, force: true })
+  return 'replaced selftest ok'
+}
+
 // skills/ads-implementation steps 8.1 (analyze), 8.2 (whole test suite, JSON for I3), 8.4 (debug builds; iOS on a Mac) and 9
 // (ADS_CHANGES.md) in one call, so the agent reads one short result instead of four outputs. Every step runs even after a
 // failure: the agent fixes from one result. `flutter` is the binary (FLUTTER, else flutter on PATH).
-export function verify(root, base, { flutter = process.env.FLUTTER || 'flutter', ios = process.platform === 'darwin' } = {}) {
+export function verify(root, base, { flutter = process.env.FLUTTER || 'flutter', ios = process.platform === 'darwin', replaced = [] } = {}) {
   const out = []; let ok = true
-  const run = (title, args, pick) => {
+  const run = (title, args, pick, judge = (ls, status) => status === 0) => {
     const t = Date.now(), r = spawnSync(flutter, args, { cwd: root, encoding: 'utf8', maxBuffer: 256 << 20 })
     const ls = `${r.stdout || ''}\n${r.stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim())
-    const pass = r.status === 0; ok &&= pass
+    const pass = judge(ls, r.status); ok &&= pass
     out.push(`${pass ? 'PASS' : 'FAIL'} ${title}: \`flutter ${args.join(' ')}\` (exit ${r.status ?? r.error?.code}, ${Math.round((Date.now() - t) / 1000)} s)`,
       ...pick(ls, pass).filter(Boolean).map((l) => `  ${l.trim()}`))
   }
   const why = (ls, pass, keep) => pass ? [ls.findLast((l) => keep.test(l))] // the success line, else the error lines and the last line
     : [...ls.filter((l) => /\berror\b|Error:|FAILURE|What went wrong|\[!\]|^\s*>/i.test(l)).slice(0, 15), ls.at(-1)]
-  run('8.1 analyze', ['analyze'], (ls) => [ls.findLast((l) => /issues? found|No issues found/.test(l)) || ls.at(-1), ...ls.filter((l) => /^\s*(error|warning) •/.test(l)).slice(0, 20)])
+  // an info / warning in a file the ads work never touched (not in `git diff <base>`, not new) was there before it: the
+  // app's own, counted with its place, not failed. An error, or any issue in a touched file, fails.
+  const ISSUE = /^\s*(info|warning|error) • .* • (\S+?):\d+:\d+ • \w+$/
+  const touched = new Set([['diff', '--name-only', base], ['ls-files', '--others', '--exclude-standard']]
+    .flatMap((a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' }).split('\n')).filter(Boolean))
+  const ours = (l) => { const m = l.match(ISSUE); return !!m && (m[1] === 'error' || touched.has(m[2])) }
+  const before = (ls) => ls.filter((l) => ISSUE.test(l) && !ours(l)).map((l) => l.match(ISSUE)[2] + l.match(/:\d+:\d+/)[0])
+  run('8.1 analyze', ['analyze'], (ls) => [ls.findLast((l) => /issues? found|No issues found/.test(l)) || ls.at(-1),
+    ...ls.filter((l) => ours(l) && /^\s*(error|warning) •/.test(l)).slice(0, 20), ...ls.filter((l) => ours(l) && /^\s*info •/.test(l)).slice(0, 10),
+    before(ls).length && `${before(ls).length} in files unchanged since ${base.slice(0, 7)} (the app's own, not failed): ${before(ls).slice(0, 5).join(', ')}`],
+  (ls, status) => status === 0 || (ls.some((l) => ISSUE.test(l)) && !ls.some(ours)))
   const json = path.join(root, '.dart_tool', TESTS_AFTER)
   run('8.2 test suite', ['test', '-j', '4', '-r', 'failures-only', '--file-reporter', `json:.dart_tool/${TESTS_AFTER}`], (ls, pass) => {
     if (pass || !fs.existsSync(json)) return [ls.at(-1)]
@@ -668,7 +820,7 @@ export function verify(root, base, { flutter = process.env.FLUTTER || 'flutter',
   run('8.4 Android build', ['build', 'apk', '--debug'], (ls, pass) => why(ls, pass, /✓ Built/))
   if (ios) run('8.4 iOS build', ['build', 'ios', '--simulator', '--debug'], (ls, pass) => why(ls, pass, /✓ Built/))
   else out.push('SKIP 8.4 iOS build: not a Mac')
-  const r = changes(root, base), rl = r.split('\n')
+  const r = changes(root, base, replaced), rl = r.split('\n')
   const fails = rl.flatMap((l, i) => l.startsWith('- **FAIL**') ? [l, ...rl.slice(i + 1).filter((_, k, a) => a.slice(0, k + 1).every((x) => x.startsWith('  - '))).slice(0, 3).map((x) => `  ${x}`)] : [])
   fs.writeFileSync(path.join(root, REPORT), r); ok &&= !fails.length
   out.push(`${fails.length ? 'FAIL' : 'PASS'} 9 ${REPORT} written`, ...r.split('\n').filter((l) => l.startsWith('- ') && !l.startsWith('- `') && !l.startsWith('- **')).slice(0, 6).map((l) => `  ${l}`),
@@ -703,6 +855,10 @@ exit 9
   assert.match(v.text, /(PASS|FAIL) 9 ADS_CHANGES\.md written\n  - \d+ files installed from the template/)
   assert.match(v.text, /  \*\*FAIL\*\* P2 .*\n    - .+\n/, 'a failed check comes with its evidence lines')
   assert.ok(fs.existsSync(path.join(root, REPORT)))
+  // analyze: an info in a file untouched since base passes (listed); an info in an installed file fails
+  const an = (out) => { w('flutter.sh', `#!/bin/sh\n[ "$1" = analyze ] && { printf '${out}\\n\\n1 issue found. (ran in 1.0s)\\n'; exit 1; }\nexit 0\n`); return verify(root, base, { flutter: path.join(root, 'flutter.sh'), ios: false }).text }
+  assert.match(an('   info • Old • test/old_test.dart:9:2 • deprecated_member_use'), /^PASS 8\.1 analyze: .*\n  1 issue found\. .*\n  1 in files unchanged since \w{7} \(the app's own, not failed\): test\/old_test\.dart:9:2\n/)
+  assert.match(an('   info • New • lib/google_ads_material/ad_flags.dart:3:1 • unused_import'), /^FAIL 8\.1 analyze: .*\n  1 issue found\. .*\n  info • New • lib\/google_ads_material\/ad_flags\.dart:3:1 • unused_import\n/)
   fs.rmSync(root, { recursive: true, force: true })
   return 'verify selftest ok'
 }
@@ -712,9 +868,14 @@ function selftest() {
   const w = (f, s) => { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), s) }
   fixture(w)
   const r = (f) => read(path.join(root, f))
+  w('android/settings.gradle.kts', 'plugins {\n    id("org.jetbrains.kotlin.android") version "2.2.20" apply false\n}\n')
+  w('android/app/build.gradle.kts', r('android/app/build.gradle.kts').replace('android {\n', 'android {\n    kotlinOptions {\n        jvmTarget = JavaVersion.VERSION_17.toString()\n    }\n\n'))
 
   const first = install(root)
   assert.deepEqual(first.todo, [])
+  assert.doesNotMatch(r('android/app/build.gradle.kts'), /kotlinOptions/)
+  assert.match(r('android/app/build.gradle.kts'), /\nkotlin \{\n    compilerOptions \{\n        jvmTarget = org\.jetbrains\.kotlin\.gradle\.dsl\.JvmTarget\.JVM_17\n    \}\n\}\n$/, 'kotlinOptions moved to compilerOptions, same JVM')
+  assert.match(r('android/settings.gradle.kts'), /id\("org\.jetbrains\.kotlin\.android"\) version "2\.4\.0" apply false \/\/ firebase_analytics 13 \(play-services-measurement 24\)\n/, 'Kotlin 2.2.20 raised to the tested 2.4.0')
   const ads = walk(path.join(TEMPLATE, 'lib/google_ads_material'))
   assert.ok(ads.length >= 15 && ads.every((f) => fs.existsSync(path.join(root, 'lib/google_ads_material', f))), 'every template Dart file copied')
   assert.match(r('test/google_ads_material/ads_rules_test.dart'), /package:my_app\/google_ads_material\/ads_id\.dart/)
@@ -740,11 +901,13 @@ function selftest() {
   assert.ok(prem.length === 3 && prem.every((f) => fs.existsSync(path.join(root, 'lib/premium_core', f))), 'the Premium layer is installed by default')
   assert.match(r('test/premium_core/premium_rules_test.dart'), /package:my_app\/premium_core\/free_use_gate\.dart/)
 
+  w('android/settings.gradle.kts', 'plugins {\n    id("org.jetbrains.kotlin.android") version "2.5.0" apply false\n}\n') // newer than the tested one: kept
   // second run: nothing added twice, nothing overwritten
   const snapshot = walk(root).map((f) => [f, r(f)])
   const second = install(root)
   assert.ok(second.done.every((l) => l.startsWith('kept ')), second.done.join('\n'))
   assert.deepEqual(walk(root).map((f) => [f, r(f)]), snapshot)
+  assert.match(r('android/settings.gradle.kts'), /version "2\.5\.0" apply false/, 'a newer Kotlin plugin is kept')
 
   // an app whose native files were already changed: nothing guessed, exact steps returned
   fs.writeFileSync(path.join(root, 'android/app/src/main/kotlin/com/acme/my_app/MainActivity.kt'), 'package com.acme.my_app\n\nclass MainActivity : FlutterFragmentActivity() { /* own code */ }\n')
@@ -773,9 +936,9 @@ function selftest() {
   o = shape((t) => t.replace('  cupertino_icons: ^1.0.8\n', '  cupertino_icons: ^1.0.8\n  webview_flutter_wkwebview: ^3.20.0\n'))
   assert.match(o.out, /^  webview_flutter_wkwebview: \^3\.20\.0$/m, 'the app\'s own dependency kept')
   assert.ok(o.out.endsWith(`\n\n${PIN}`), 'and the override added')
-  o = shape((t) => t.replace('  cupertino_icons: ^1.0.8\n', '  cupertino_icons: ^1.0.8\n  shimmer:\n    git: https://example.com/shimmer.git\n'))
-  assert.deepEqual(o.todo, ['pubspec.yaml: shimmer is not from pub.dev (git/path): the pattern was tested with 4.0.0; set it, or keep it and say so'])
-  assert.match(o.out, /^  shimmer:\n    git: https:\/\/example\.com\/shimmer\.git\n/m)
+  o = shape((t) => t.replace('  cupertino_icons: ^1.0.8\n', '  cupertino_icons: ^1.0.8\n  firebase_analytics:\n    git: https://example.com/firebase_analytics.git\n'))
+  assert.deepEqual(o.todo, ['pubspec.yaml: firebase_analytics is not from pub.dev (git/path): the pattern was tested with 13.0.0; set it, or keep it and say so'])
+  assert.match(o.out, /^  firebase_analytics:\n    git: https:\/\/example\.com\/firebase_analytics\.git\n/m)
 
   // an app with no paid tier: no Premium layer, no purchase or preferences package, and changes() does not miss them
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'ads-install-'))
@@ -793,15 +956,18 @@ function selftest() {
   return 'selftest ok'
 }
 
-const argv = process.argv.slice(2)
-if (argv[0] === 'selftest') console.log(`${selftest()}\n${changesSelftest()}\n${verifySelftest()}\n${demoSelftest()}`)
+const rawArgv = process.argv.slice(2)
+const ri = rawArgv.indexOf('--replaced') // --replaced a,b,c: the app's own ads layer (changes / verify)
+const replacedArg = ri < 0 ? [] : (rawArgv[ri + 1] || '').split(',').map((f) => f.trim()).filter(Boolean)
+const argv = ri < 0 ? rawArgv : rawArgv.filter((_, i) => i !== ri && i !== ri + 1)
+if (argv[0] === 'selftest') console.log(`${selftest()}\n${changesSelftest()}\n${replacedSelftest()}\n${verifySelftest()}\n${demoSelftest()}`)
 else if (argv[0] === 'verify' && argv.length === 3) {
-  const { ok, text } = verify(path.resolve(argv[1]), argv[2])
+  const { ok, text } = verify(path.resolve(argv[1]), argv[2], { replaced: replacedArg })
   console.log(text); if (!ok) process.exit(1)
 }
 else if (argv[0] === 'changes' && (argv.length === 3 || argv.length === 4)) {
   const out = path.resolve(argv[3] || path.join(argv[1], REPORT))
-  const r = changes(path.resolve(argv[1]), argv[2])
+  const r = changes(path.resolve(argv[1]), argv[2], replacedArg)
   fs.writeFileSync(out, r)
   console.log(`${out}\n${r.split('\n').filter((l) => l.startsWith('- ') && !l.startsWith('- `')).slice(0, 6).join('\n')}`)
   const fails = r.split('\n').filter((l) => l.startsWith('- **FAIL**'))
@@ -811,4 +977,4 @@ else if (argv[0] === 'changes' && (argv.length === 3 || argv.length === 4)) {
   console.log(done.join('\n'))
   if (todo.length) { console.error(`\nNOT DONE — add these, then run again:\n- ${todo.join('\n- ')}`); process.exit(1) }
   console.log('\nads pattern installed. Next: flutter pub get; wire it as skills/flutter-ads/SKILL.md section 3 says.')
-} else if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) { console.error('usage: ads-install.mjs <project> [--no-premium] | changes <project> <base commit> [<out file>] | selftest'); process.exit(2) }
+} else if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) { console.error('usage: ads-install.mjs <project> [--no-premium] | changes <project> <base commit> [<out file>] [--replaced a,b] | verify <project> <base commit> [--replaced a,b] | selftest'); process.exit(2) }

@@ -103,7 +103,8 @@ class PremiumStore extends ChangeNotifier {
   Future<RestoreOutcome> restore() async {
     if (!configured) return RestoreOutcome.failed;
     try {
-      AppResumeAdListener.skipNextResume();
+      // no skipNextResume(): restore leaves no app (Android: a query; iOS: at most a sign-in alert, the app stays in
+      // front), so a skip would only eat the next real resume ad
       final info = await Purchases.restorePurchases();
       _apply(info);
       return _active(info) ? RestoreOutcome.restored : RestoreOutcome.nothingToRestore;

@@ -20,8 +20,6 @@ class NativeAdStyle(private val options: Map<String, Any>?, private val view: Vi
         }
     }
 
-    private fun str(key: String, def: String) = (options?.get(key) as? String)?.ifEmpty { null } ?: def
-
     private fun dp(v: Float) =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, view.resources.displayMetrics)
 
@@ -32,26 +30,16 @@ class NativeAdStyle(private val options: Map<String, Any>?, private val view: Vi
     val badgeBackground get() = hex("btnAdBgColor", "FFB300")
     val badgeText get() = hex("btnAdTextColor", "FFFFFF")
 
-    /// CTA button ka gradient: btnBgColor1 -> btnBgColor2 (dono same = solid), angle aur radius bhi online.
-    fun buttonBackground(): GradientDrawable {
-        val colors = intArrayOf(hex("btnBgColor1", "FFFFFF"), hex("btnBgColor2", "FFFFFF"))
+    /// CTA button: IPTV MainActivity.kt:316-328 — gradient top-right btnBgColor2 -> bottom-left btnBgColor1
+    /// (dono same = solid), corner 10 dp.
+    fun buttonBackground() = GradientDrawable(
+        GradientDrawable.Orientation.TR_BL, intArrayOf(hex("btnBgColor2", "FFFFFF"), hex("btnBgColor1", "FFFFFF"))
+    ).apply { cornerRadius = dp(10f) }
 
-        val orientation = when (str("btnGradientAngle", "0").toIntOrNull() ?: 0) {
-            45 -> GradientDrawable.Orientation.BL_TR
-            90 -> GradientDrawable.Orientation.BOTTOM_TOP
-            135 -> GradientDrawable.Orientation.BR_TL
-            180 -> GradientDrawable.Orientation.RIGHT_LEFT
-            270 -> GradientDrawable.Orientation.TOP_BOTTOM
-            else -> GradientDrawable.Orientation.LEFT_RIGHT
-        }
-        return GradientDrawable(orientation, colors).apply {
-            cornerRadius = dp(str("btnRadius", "30").toFloatOrNull() ?: 30f)
-        }
-    }
-
-    fun applyText(headline: TextView?, bodyView: TextView?, cta: TextView?, badge: TextView?) {
+    fun applyText(headline: TextView?, bodyView: TextView?, cta: TextView?, badge: TextView?, advertiser: TextView? = null) {
         headline?.setTextColor(header)
         bodyView?.setTextColor(body)
+        advertiser?.setTextColor(body)
         cta?.setTextColor(buttonText)
         cta?.background = buttonBackground()
         badge?.setTextColor(badgeText)

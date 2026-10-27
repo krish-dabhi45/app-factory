@@ -53,23 +53,26 @@ class InterstitialSlot {
     return c.future;
   }
 
-  /// Ad dikhao. Ad close / fail hone par [onDone] call hota hai (navigation yahi karo).
-  /// Preloaded ad na ho to "Showing Ads..." loader ke saath abhi load karke dikhata hai
-  /// (demo app jaisa), max `AdsId.inAppAdWait` (online `inapp_ad_wait_seconds`, default 5) tak;
-  /// usse zyada lage to bina ad [onDone]. [loadIfMissing] false ho to seedha [onDone].
+  /// Ad dikhao. [onDone] ek hi baar call hota hai (navigation yahi karo).
+  /// [loader] (home / tab tap, IPTV `onTapInter`): "Loading..." loader fixed `AdsId.inAppAdWait` (default 2 s) tak,
+  /// ad preload na ho to isi beech load hota hai; phir ready ho to ad, warna bina ad [onDone].
+  /// [loader] false: sirf ready ad (splash, intro).
+  /// [openBehind]: [onDone] ad ke impression ke 1 s baad (agli screen ad ke peeche khulti hai, ad band karte hi wahi dikhti hai).
   Future<bool> show({
     required VoidCallback onDone,
     VoidCallback? onShown,
     bool preloadAfter = true,
-    bool loadIfMissing = true,
+    bool loader = false,
+    bool openBehind = false,
   }) async {
     if (AdFlags.isPremium || isOff || !AdFlags.adsReady || AdFlags.isFullScreenAdShowing) {
       onDone();
       return false;
     }
-    if (_ad == null && loadIfMissing) {
-      AppHud.show(status: 'Showing Ads...');
-      await preload().timeout(AdsId.inAppAdWait, onTimeout: () => false);
+    if (loader) {
+      AppHud.show(status: 'Loading...');
+      preload();
+      await Future<void>.delayed(AdsId.inAppAdWait);
       AppHud.dismiss();
     }
     final ad = _ad;
@@ -79,27 +82,50 @@ class InterstitialSlot {
       return false;
     }
     _ad = null;
-    ad.fullScreenContentCallback = FullScreenContentCallback(
-      onAdShowedFullScreenContent: (_) {
-        AdFlags.isFullScreenAdShowing = true;
-        onShown?.call();
-      },
-      onAdDismissedFullScreenContent: (ad) {
-        AdFlags.isFullScreenAdShowing = false;
-        ad.dispose();
-        onDone();
-        if (preloadAfter) preload();
-      },
-      onAdFailedToShowFullScreenContent: (ad, e) {
-        AdFlags.isFullScreenAdShowing = false;
-        ad.dispose();
-        onDone();
-        if (preloadAfter) preload();
-      },
-    );
+    ad.fullScreenContentCallback =
+        fullScreenCallback(onDone: onDone, onShown: onShown, openBehind: openBehind, after: preloadAfter ? preload : null);
     ad.show();
     return true;
   }
+}
+
+/// Interstitial / app open ke callbacks. [onDone] exactly ek baar: [openBehind] ho to impression ke 1 s baad
+/// (IPTV `ads_load_util.dart` onAdImpression), warna ad band hone par; show fail -> turant.
+/// [after] ad band / fail hone par (agla preload).
+FullScreenContentCallback<T> fullScreenCallback<T extends Ad>({
+  required VoidCallback onDone,
+  VoidCallback? onShown,
+  bool openBehind = false,
+  VoidCallback? after,
+}) {
+  var done = false;
+  void finish() {
+    if (done) return;
+    done = true;
+    onDone();
+  }
+
+  return FullScreenContentCallback<T>(
+    onAdShowedFullScreenContent: (_) {
+      AdFlags.isFullScreenAdShowing = true;
+      onShown?.call();
+    },
+    onAdImpression: (_) {
+      if (openBehind) Future<void>.delayed(const Duration(seconds: 1), finish);
+    },
+    onAdDismissedFullScreenContent: (ad) {
+      AdFlags.isFullScreenAdShowing = false;
+      ad.dispose();
+      finish();
+      after?.call();
+    },
+    onAdFailedToShowFullScreenContent: (ad, e) {
+      AdFlags.isFullScreenAdShowing = false;
+      ad.dispose();
+      finish();
+      after?.call();
+    },
+  );
 }
 
 /// App bhar ke interstitial slots.

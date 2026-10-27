@@ -54,6 +54,9 @@
 //   devices claim <project> | devices release <project> | devices status
 //   devices real [--sdk <dir>] — the real phones connected now (adb: not an emulator, state "device"; iOS: devicectl
 //                           tunnelState "connected"): {"android":[{serial,model}],"ios":[{udid,name,type,developerMode}]}
+//   devices pick android|ios [--phone-only] [--sdk <dir>] — the device to test on, chosen without asking anyone: the first
+//                           usable connected phone of that platform, else `devices up` (--phone-only: kind "none" instead);
+//                           prints {kind, serial|udid, name, skipped}
 //   devices up android|ios [--sdk <dir>] — no phone connected: the plugin's own device (emulator af-standard / simulator app-factory-iphone-17), created if missing, started in its window, booted and settled; prints its serial or udid
 //   phone save|restore <serial> — a real Android phone's own settings (font scale, dark mode, Wi-Fi, mobile data,
 //                           rotation), saved before the run changes any and put back at `devices release` and `stop`
@@ -192,6 +195,40 @@ export const realAndroidDevices = (text) => parseAdbDevices(text).filter((d) => 
 export const realIosDevices = (json) => (json.result?.devices || []).filter((d) => d.connectionProperties?.tunnelState === 'connected')
   .map((d) => ({ udid: d.hardwareProperties?.udid || '', name: d.deviceProperties?.name || '', type: d.hardwareProperties?.deviceType || '', developerMode: d.deviceProperties?.developerModeStatus || '' }))
 // devicectl's JSON goes to a temp file: `--json-output -` still prints the table (devicectl 477.39, Xcode 26.1.1)
+// devices pick: a usable phone first, else the plugin's own emulator / simulator — no question to the user, no waiting.
+// Android: woken; a lock screen gets one swipe up; still locked (it has a code) → skipped. iPhone: Developer Mode on.
+// skipped = each connected phone not used, with why, for the report.
+export function pickPhone(platform, phones, unlocked) {
+  const skipped = []
+  for (const p of phones) {
+    const id = p.serial || p.udid
+    const why = platform === 'ios' ? (p.developerMode === 'disabled' ? 'Developer Mode is off (Settings → Privacy & Security → Developer Mode)' : '')
+      : unlocked(id) ? '' : 'locked with a code — a swipe did not open it'
+    if (!why) return { phone: p, skipped }
+    skipped.push({ id, name: p.model || p.name || '', why })
+  }
+  return { phone: null, skipped }
+}
+function devicesPick(platform, a) {
+  const sdk = optOf(a)('--sdk') || findTools().androidSdk, adb = sdk && sdkTool(sdk, 'adb')
+  const phones = platform === 'ios' ? (MAC ? connectedIos() : [])
+    : adb && fs.existsSync(adb) ? realAndroidDevices(run1(adb, ['devices', '-l'], { timeout: 15000 })) : []
+  const sh = (id, ...x) => run1(adb, ['-s', id, 'shell', ...x], { timeout: 15000 })
+  const locked = (id) => /isKeyguardShowing=true/.test(sh(id, 'dumpsys', 'window'))
+  const unlocked = (id) => {
+    sh(id, 'input', 'keyevent', 'KEYCODE_WAKEUP')
+    if (!locked(id)) return true
+    const [w, h] = (sh(id, 'wm', 'size').match(/(\d+)x(\d+)\s*$/) || [0, 720, 1600]).slice(1).map(Number)
+    sh(id, 'input', 'swipe', String(w >> 1), String(Math.round(h * 0.85)), String(w >> 1), String(Math.round(h * 0.2)), '200')
+    sleepMs(1000)
+    return !locked(id)
+  }
+  const { phone, skipped } = pickPhone(platform, phones, unlocked)
+  if (phone) return JSON.stringify({ platform, kind: 'phone', ...(phone.serial ? { serial: phone.serial } : { udid: phone.udid }), name: phone.model || phone.name || '', skipped })
+  if (a.includes('--phone-only')) return JSON.stringify({ platform, kind: 'none', skipped }) // a build run starts its own emulator / simulators
+  const up = JSON.parse(devicesUp(platform, a))
+  return JSON.stringify({ ...up, kind: platform === 'ios' ? 'simulator' : 'emulator', skipped })
+}
 function devicesReal(a) {
   const sdk = optOf(a)('--sdk') || findTools().androidSdk
   const android = sdk && fs.existsSync(sdkTool(sdk, 'adb')) ? realAndroidDevices(run1(sdkTool(sdk, 'adb'), ['devices', '-l'], { timeout: 15000 })) : []
@@ -247,8 +284,9 @@ function devices([sub, project, ...rest]) {
   const holder = () => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null)
   if (sub === 'real') return devicesReal([project, ...rest].filter(Boolean))
   if (sub === 'up') { if (!['android', 'ios'].includes(project)) throw new Error('devices up android|ios [--sdk <dir>]'); return devicesUp(project, rest) }
+  if (sub === 'pick') { if (!['android', 'ios'].includes(project)) throw new Error('devices pick android|ios [--phone-only] [--sdk <dir>]'); return devicesPick(project, rest) }
   if (sub === 'status') { const h = holder(); return h ? `in use by ${h.project} since ${h.since}` : 'free' }
-  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status | devices real [--sdk <dir>] | devices up android|ios [--sdk <dir>]')
+  if (!['claim', 'release'].includes(sub) || !project) throw new Error('devices claim <project> | devices release <project> | devices status | devices real [--sdk <dir>] | devices pick android|ios [--sdk <dir>] | devices up android|ios [--sdk <dir>]')
   const me = path.resolve(project)
   if (sub === 'claim') {
     fs.mkdirSync(path.dirname(f), { recursive: true })
@@ -1022,6 +1060,7 @@ function devicesUp(platform, a) {
   const t0 = Date.now(), secs = () => Math.round((Date.now() - t0) / 1000)
   if (platform === 'ios') {
     if (!MAC) throw new Error('iOS simulators exist only on macOS with Xcode — use `devices up android`')
+    if (!run1('xcrun', ['simctl', 'help'])) throw new Error(`xcrun has no simctl: the active developer folder is ${run1('xcode-select', ['-p']).trim() || 'not set'}, not an Xcode — \`sudo xcode-select -s /Applications/<Xcode>.app\` (or DEVELOPER_DIR=/Applications/<Xcode>.app/Contents/Developer for one command), then again`)
     const name = 'app-factory-iphone-17'
     const all = Object.values(JSON.parse(run1('xcrun', ['simctl', 'list', 'devices', '--json']) || '{"devices":{}}').devices).flat()
     let d = all.find((x) => x.name === name && x.isAvailable !== false), created = false
@@ -1807,6 +1846,15 @@ flutter:
   assert.deepEqual(phoneRestoreCmds({ fontScale: 'null', night: '', wifi: 'null', data: '', accel: '', rotation: '' }), [['shell', 'settings', 'delete', 'system', 'font_scale']], 'a value the phone never had is not invented')
   assert.throws(() => run(['phone', 'save', 'emulator-5554', '--sdk', '/x']), /is an emulator/)
   assert.match(run(['devices', 'real', '--sdk', '/no/such/sdk']), /^\{"android":\[\],"ios":/)
+  // devices pick: the first usable phone wins, the others say why they were skipped; none usable → the emulator / simulator
+  { const opens = { A: false, B: true, C: true }
+    assert.deepEqual(pickPhone('android', [{ serial: 'A', model: 'M04' }, { serial: 'B', model: 'Moto' }, { serial: 'C' }], (id) => opens[id]),
+      { phone: { serial: 'B', model: 'Moto' }, skipped: [{ id: 'A', name: 'M04', why: 'locked with a code — a swipe did not open it' }] })
+    assert.deepEqual(pickPhone('android', [{ serial: 'A', model: 'M04' }], () => false).phone, null, 'only a coded phone → no phone')
+    assert.deepEqual(pickPhone('android', [], () => true), { phone: null, skipped: [] })
+    assert.equal(pickPhone('ios', [{ udid: 'U1', name: 'XR', developerMode: 'disabled' }, { udid: 'U2', name: '11', developerMode: 'enabled' }], () => false).phone.udid, 'U2')
+    assert.equal(pickPhone('ios', [{ udid: 'U3', name: 'SE', developerMode: '' }], () => false).phone.udid, 'U3', 'status unknown: tried')
+    assert.throws(() => run(['devices', 'pick', 'web']), /devices pick android\|ios/) }
   // settled: two 3 s samples in a row ≤ 50% busy; steal (the host taking the CPU) counts as busy
   assert.equal(cpuBusy('cpu  100 0 100 800 0 0 0 0 0 0', 'cpu  150 0 150 900 0 0 0 0 0 0'), 50)
   assert.equal(cpuBusy('cpu  0 0 0 0 0 0 0 0', 'cpu  10 0 10 20 0 0 0 60 0 0'), 80, 'steal is busy')

@@ -5,16 +5,22 @@ import 'package:common_flow_demo/ads/ads_load_util.dart';
 import 'package:common_flow_demo/ads/ads_splash_utils.dart';
 import 'package:common_flow_demo/ads/ads_variable.dart';
 import 'package:common_flow_demo/ads/app_variable.dart';
+import 'package:common_flow_demo/ads/loading_screen.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The IPTV_two ads layer (lib/ads/) without the ads SDK: IPTV's rules, and the fixes F1 / F2 (ads_load_util.dart,
-/// ads_variable.dart headers).
+/// The IPTV_two ads layer (lib/ads/) without the ads SDK, on this app's own keys (remote_config.json, from which
+/// lib/ads/ads_variable.dart is generated): IPTV's store / read / reset rules, onTapInter's rule, the loading dialog, F1.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  final config = jsonDecode(File('assets/ads/config.json').readAsStringSync()) as Map<String, dynamic>;
+  late Map<String, dynamic> config;
+  setUpAll(() => config = jsonDecode(File('remote_config.json').readAsStringSync()) as Map<String, dynamic>);
+  // an ad id: an AdMob ad unit or "11" (off); facebookId / facebookToken are the native factories' inputs, not ad ids
+  bool isAdId(String k, Object? v) => v is String && (RegExp(r'^ca-app-pub-\d+/\d+$').hasMatch(v) || v == '11') && !k.startsWith('facebook');
+  const unit = 'ca-app-pub-3940256099942544/1033173712';
   var online = true;
   final toasts = <String>[];
   final setToast = <Map>[];
@@ -27,9 +33,6 @@ void main() {
     AdsVariable.isPurchase.value = false;
     AdsVariable.isFirstTimeVisited = false;
     AdsVariable.homeFlag = 0;
-    AdsVariable.adShowHomeFlag = "1";
-    AdsVariable.homeFlagOnline = "1";
-    AdsVariable.interPreLoad = "11";
     messenger.setMockMethodCallHandler(const MethodChannel('dev.fluttercommunity.plus/connectivity'),
         (call) async => online ? ['wifi'] : ['none']);
     messenger.setMockMethodCallHandler(const MethodChannel('PonnamKarthik/fluttertoast'), (call) async {
@@ -42,78 +45,97 @@ void main() {
     });
   });
 
-  test('config.json (IPTV\'s, the Remote Config value): every key lands in AdsVariable and in SharedPreferences', () async {
+  test('remote_config.json (the Remote Config value): every key lands in its AdsVariable field and in SharedPreferences', () async {
     final splash = AdsSplashUtils()..prefs = await SharedPreferences.getInstance();
     splash.setOnlineIds(config);
-    expect(AdsVariable.interSplash, config['interSplash']);
-    expect(AdsVariable.appOpenAds, config['appOpenAds']);
-    expect(AdsVariable.nativeIntroBig, config['nativeIntroBig']);
-    expect(AdsVariable.nativeHome, config['nativeHome']);
-    expect(AdsVariable.banner, config['banner']);
-    expect(AdsVariable.homeFlagOnline, config['homeFlagOnline']);
-    expect(AdsVariable.btnBgColor1, config['btnBgColor1']);
-    expect(AdsVariable.useCount, config['useCount']);
-    expect(AdsVariable.showIAMTester, config['showIAMTester']);
     final prefs = await SharedPreferences.getInstance();
-    // every key of config.json is stored for the next launch (IPTV ads_splash_utils.dart:197-269), except
-    // showRateScreen, which IPTV never reads
-    const notStored = {'showRateScreen'};
-    for (final k in config.keys.where((k) => !notStored.contains(k))) {
-      expect(prefs.get(k)?.toString(), config[k].toString(), reason: k);
+    for (final k in config.keys) {
+      expect(AdsVariable.valueOf(k), config[k], reason: k);
+      expect(prefs.get(k), config[k], reason: '$k stored for the next launch');
     }
   });
 
-  test('resetAdIds: every id "11" and the loaded app open ads dropped; banner stays, as in IPTV', () {
-    AdsVariable.banner = 'ca-app-pub-x/banner';
-    AdsVariable.interPreLoad = 'ca-app-pub-x/inter';
-    AdsVariable.nativeHome = 'ca-app-pub-x/native';
-    AdsVariable.resetAdIds();
-    expect([AdsVariable.interPreLoad, AdsVariable.nativeHome, AdsVariable.appOpenAds, AdsVariable.nativeIntroBig], everyElement('11'));
-    expect(AdsVariable.banner, 'ca-app-pub-x/banner', reason: 'IPTV ads_variable.dart:109-127 does not reset banner');
+  test('the next launch reads the stored copy (IPTV getOnlineIds)', () async {
+    SharedPreferences.setMockInitialValues(config.map((k, v) => MapEntry(k, v as Object)));
+    AdsVariable.readStored(await SharedPreferences.getInstance());
+    for (final k in config.keys) {
+      expect(AdsVariable.valueOf(k), config[k], reason: k);
+    }
   });
 
-  test('F2: addAdIds reads the stored "nativeIntroBig" (IPTV read "nativeBig", which nothing writes)', () async {
-    SharedPreferences.setMockInitialValues({'nativeIntroBig': 'ca-app-pub-x/big', 'nativeBig': 'wrong'});
-    await AdsVariable.addAdIds();
-    expect(AdsVariable.nativeIntroBig, 'ca-app-pub-x/big');
+  test('resetAdIds (a purchase): every ad id "11", every other value kept', () async {
+    final splash = AdsSplashUtils()..prefs = await SharedPreferences.getInstance();
+    splash.setOnlineIds(config);
+    AdsVariable.resetAdIds();
+    for (final k in config.keys) {
+      expect(AdsVariable.valueOf(k), isAdId(k, config[k]) ? '11' : config[k], reason: k);
+    }
   });
 
   group('onTapInter (IPTV utils/app_variable.dart:61-90)', () {
-    test('interPreLoad "11": the screen opens, homeFlag unchanged', () async {
+    late BuildContext context;
+    Future<void> pumpApp(WidgetTester tester) => tester.pumpWidget(MaterialApp(home: Builder(builder: (c) {
+          context = c;
+          return const SizedBox();
+        })));
+    Future<int> tap({String adUnitId = unit, String showFlag = "1", String everyTapFlag = "1"}) async {
       var opened = 0;
-      await onTapInter(() => opened++);
-      expect((opened, AdsVariable.homeFlag), (1, 0));
+      await onTapInter(context, () => opened++, adUnitId: adUnitId, showFlag: showFlag, everyTapFlag: everyTapFlag, enable: false);
+      return opened;
+    }
+
+    testWidgets('id "11": the screen opens, homeFlag unchanged', (tester) async {
+      await pumpApp(tester);
+      expect((await tap(adUnitId: '11'), AdsVariable.homeFlag), (1, 0));
     });
 
-    test('an odd homeFlag: the screen opens at once, homeFlag + 1', () async {
-      AdsVariable.interPreLoad = 'ca-app-pub-x/inter';
+    testWidgets('an odd homeFlag: the screen opens at once, homeFlag + 1', (tester) async {
+      await pumpApp(tester);
       AdsVariable.homeFlag = 1;
-      var opened = 0;
-      await onTapInter(() => opened++);
-      expect((opened, AdsVariable.homeFlag), (1, 2));
+      expect((await tap(), AdsVariable.homeFlag), (1, 2));
     });
 
-    test('adShowHomeFlag not "1", purchased, or isFirstTimeVisited null: no ad and no count', () async {
-      AdsVariable.interPreLoad = 'ca-app-pub-x/inter';
-      var opened = 0;
-      AdsVariable.adShowHomeFlag = "0";
-      await onTapInter(() => opened++);
-      AdsVariable.adShowHomeFlag = "1";
+    testWidgets('a second tap while the first runs is ignored: the screen opens once', (tester) async {
+      await pumpApp(tester);
+      AdsVariable.homeFlag = 1;
+      final both = await Future.wait([tap(), tap()]);
+      expect((both[0] + both[1], AdsVariable.homeFlag), (1, 2));
+    });
+
+    testWidgets('showFlag not "1", purchased, or isFirstTimeVisited null: no ad and no count', (tester) async {
+      await pumpApp(tester);
+      final opened = await tap(showFlag: "0");
       AdsVariable.isPurchase.value = true;
-      await onTapInter(() => opened++);
+      final opened2 = await tap();
       AdsVariable.isPurchase.value = false;
       AdsVariable.isFirstTimeVisited = null;
-      await onTapInter(() => opened++);
-      expect((opened, AdsVariable.homeFlag), (3, 0));
+      final opened3 = await tap();
+      expect((opened + opened2 + opened3, AdsVariable.homeFlag), (3, 0));
     });
 
-    test('offline: "Please Start Your Internet." and nothing opens', () async {
+    testWidgets('offline: "Please Start Your Internet." and nothing opens', (tester) async {
+      await pumpApp(tester);
       online = false;
-      var opened = 0;
-      await onTapInter(() => opened++);
-      expect(opened, 0);
+      expect(await tap(), 0);
       expect(toasts, ['Please Start Your Internet.']);
     });
+  });
+
+  testWidgets('loadingScreen: a second show while it is up adds no dialog; hide closes it', (tester) async {
+    late BuildContext context;
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (c) {
+      context = c;
+      return const SizedBox();
+    })));
+    loadingScreen.show(context);
+    loadingScreen.show(context);
+    await tester.pump();
+    expect(find.text('Loading...'), findsOneWidget);
+    loadingScreen.hide();
+    loadingScreen.hide();
+    await tester.pumpAndSettle();
+    expect(find.text('Loading...'), findsNothing);
+    expect(find.byType(SizedBox), findsWidgets, reason: 'the screen under the dialog is still there');
   });
 
   test('F1: showInterCommon with no ad loaded opens the screen once and does not throw', () async {
@@ -123,12 +145,15 @@ void main() {
     expect(opened, 1);
   });
 
-  test('setupFbAdsId sends IPTV\'s "setToast" keys on "nativeChannel" (Android registers the native factories there)', () async {
+  test('setupFbAdsId sends the native factories\' "setToast" arguments when the app has native ad colours', () async {
     setupFbAdsId();
     await Future<void>.delayed(Duration.zero);
-    expect(setToast.single.keys.toSet(), {
-      'isPurchase', 'facebookId', 'facebookToken', 'nativeBGColor', 'btnBgColor', 'btnBgColor1', 'btnBgColor2',
-      'btnAdBgColor', 'btnTextColor', 'btnAdTextColor', 'headerTextColor', 'bodyTextColor',
-    });
+    final args = AdsVariable.nativeChannelArgs();
+    if (args == null) {
+      expect(setToast, isEmpty, reason: 'no native ad keys in remote_config.json: nothing sent');
+    } else {
+      expect(setToast.single.keys.toSet(), containsAll(['facebookId', 'facebookToken', 'nativeBGColor', 'btnBgColor1', 'btnBgColor2',
+          'btnTextColor', 'btnAdTextColor', 'btnAdBgColor', 'headerTextColor', 'bodyTextColor']));
+    }
   });
 }

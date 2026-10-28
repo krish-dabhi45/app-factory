@@ -15,43 +15,60 @@ void showLog(String msg) {
 }
 
 void showToast(String msg, {bool isShowBlack = false}) {
-  final context = AdsVariable.navigatorKey.currentContext;
-  final fontSize = context == null ? 14.0 : 45 * MediaQuery.sizeOf(context).width / 1242;
+  final view = WidgetsBinding.instance.platformDispatcher.views.first;
+  final fontSize = 45 * view.physicalSize.width / view.devicePixelRatio / 1242;
   Fluttertoast.showToast(msg: msg, textColor: isShowBlack ? Colors.white : Colors.black, backgroundColor: isShowBlack ? Colors.black : Colors.white, fontSize: fontSize, toastLength: Toast.LENGTH_SHORT);
 }
 
-/// Every home feature tap (IPTV: the import buttons, play, a channel, a playlist). On every second tap (homeFlag even)
-/// "Loading..." for 2 s, then the interstitial; the screen opens 1 s after its impression. `homeFlagOnline` "0" = every tap.
+bool _tapRunning = false;
+
+/// IPTV `onTapInter` (utils/app_variable.dart:61-90). [context]: the tapped widget's, for the "Loading..." dialog
+/// (IPTV used `Get.context`). The interstitial id and the two switches are the app's own, passed in (IPTV read
+/// `AdsVariable.interPreLoad`, `adShowHomeFlag`, `homeFlagOnline`, `sendRevenueToAnalyticsForInterPreLoad`):
+/// - [adUnitId] "11" = no ad, the screen opens;
+/// - [showFlag] not "1" = no ad (IPTV's `adShowHomeFlag`);
+/// - [everyTapFlag] "0" = an ad on every tap, otherwise on every second tap — [AdsVariable.homeFlag] even (IPTV's
+///   `homeFlagOnline`); a screen this opened makes an odd homeFlag even on Back;
+/// - [enable]: this ad's revenue event.
+/// An ad tap shows "Loading..." for 2 s, then the interstitial; the screen opens 1 s after its impression.
 /// Offline: a toast and nothing opens (IPTV).
-Future<void> onTapInter(Function() onTap) async {
-  AdsVariable.isShowingAd.value = false;
-  if (await checkConnectivity()) {
-    if (!AdsVariable.isPurchase.value && AdsVariable.isFirstTimeVisited != null) {
-      showLog(AdsVariable.interPreLoad);
-      if (AdsVariable.adShowHomeFlag == "1" && AdsVariable.interPreLoad != "11") {
-        if (AdsVariable.homeFlagOnline == "0") {
-          AdsVariable.homeFlag = 0;
-        }
-        if (AdsVariable.homeFlag % 2 == 0) {
-          loadingScreen.show();
-          await AdsLoadUtil().loadInterCommon((AdsVariable.interPreLoad), enable: AdsVariable.sendRevenueToAnalyticsForInterPreLoad).then((value) {
-            Future.delayed(const Duration(seconds: 2)).then((value) async {
-              loadingScreen.hide();
-              AdsLoadUtil().showInterCommon(() {}, onTap);
-            });
-          });
+/// One tap at a time: IPTV lets a second tap that lands before the dialog (during the connectivity check) run too —
+/// two "Loading..." dialogs, two interstitial loads, the screen opened twice. Here it is ignored.
+Future<void> onTapInter(BuildContext context, Function() onTap, {required String adUnitId, String showFlag = "1", String everyTapFlag = "1", required bool enable}) async {
+  if (_tapRunning) return;
+  _tapRunning = true;
+  try {
+    AdsVariable.isShowingAd.value = false;
+    if (await checkConnectivity()) {
+      if (!AdsVariable.isPurchase.value && AdsVariable.isFirstTimeVisited != null) {
+        showLog(adUnitId);
+        if (showFlag == "1" && adUnitId != "11") {
+          if (everyTapFlag == "0") {
+            AdsVariable.homeFlag = 0;
+          }
+          if (AdsVariable.homeFlag % 2 == 0) {
+            if (!context.mounted) return; // the tapped screen closed during the connectivity check
+            loadingScreen.show(context);
+            await AdsLoadUtil().loadInterCommon(adUnitId, enable: enable);
+            AdsVariable.homeFlag++;
+            await Future.delayed(const Duration(seconds: 2));
+            loadingScreen.hide();
+            AdsLoadUtil().showInterCommon(() {}, onTap);
+            return;
+          } else {
+            onTap();
+          }
+          AdsVariable.homeFlag++;
         } else {
           onTap();
         }
-        AdsVariable.homeFlag++;
       } else {
         onTap();
       }
     } else {
-      onTap();
+      showToast("Please Start Your Internet.");
     }
-  } else {
-    showToast("Please Start Your Internet.");
+  } finally {
+    _tapRunning = false;
   }
 }
-

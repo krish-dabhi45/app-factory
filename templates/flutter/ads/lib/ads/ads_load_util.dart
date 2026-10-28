@@ -7,22 +7,24 @@ import 'app_connectivity.dart';
 import 'app_open_ad.dart';
 import 'app_variable.dart';
 import 'life_cycle.dart';
-import 'loading_screen.dart';
 
 /// IPTV_two `lib/ads/ads_load_util.dart`, ported to plain Flutter (GetxController → a plain class, RxBool → RxFlag,
-/// Obx → ListenableBuilder, `x.w` → x × width / 1242). Not ported: the commented-out code, and `loadBanner`,
-/// `BannerAdsWidget`, `loadOpenAdCommon` and the `adLoad` counter, which no IPTV screen uses (banners are
-/// [BannerWidget]); the shimmer placeholders of [NativeAdsWidget], which IPTV never reaches (both its call sites
-/// render the widget only once `isNativeAdLoaded` is true).
+/// Obx → ListenableBuilder, `x.w` → x × width / 1242). Every ad id and switch is the app's own, passed in by the caller
+/// (IPTV read its own AdsVariable fields here: `appOpenSplash` in [loadInterSplash] / [loadAppOpenSplash],
+/// `sendRevenueToAnalytics` in [sendRevenueToAnalytics]). Not ported: the commented-out code; `loadBanner`,
+/// `BannerAdsWidget`, `loadOpenAdCommon`, the `adLoad` counter, `loadAppOpenIntroPremium` and `loadInterIntroPremium`,
+/// which no IPTV screen calls (banners are [BannerWidget]); the shimmer placeholders of [NativeAdsWidget], which IPTV
+/// never reaches (both its call sites render the widget only once `isNativeAdLoaded` is true).
 class AdsLoadUtil {
   late AppLifecycleReactor appLifecycleReactor;
 
   /// Send Revenue Event to Firebase Function --------------------------------------
+  /// [enabled]: the caller's switch for this ad (an app with an all-ads switch passes `all && thisAd`, as IPTV checked
+  /// both).
   static Future<void> sendRevenueToAnalytics(double valueMicros, String? currency, PrecisionType precision, bool enabled) async {
     try {
       showLog("analytics===========");
       showLog("Enabled value : $enabled");
-      if (!AdsVariable.sendRevenueToAnalytics) return;
       if (!enabled) {
         return;
       }
@@ -45,10 +47,10 @@ class AdsLoadUtil {
   }
 
   /// --------- load open ads -----------------------------------------------------
-  Future<void> loadAppOpenSplash(Function() navigateScreen) async {
-    AppOpenAdManager appOpenAdManager = AppOpenAdManager()..loadSplashAd(AdsVariable.appOpenSplash, () => navigateScreen());
-    appLifecycleReactor = AppLifecycleReactor(appOpenAdManager: appOpenAdManager);
-    AppLifecycleReactor(appOpenAdManager: appOpenAdManager).listenToAppStateChanges();
+  Future<void> loadAppOpenSplash(String adUnitId, Function() navigateScreen) async {
+    AppOpenAdManager appOpenAdManager = AppOpenAdManager()..loadSplashAd(adUnitId, () => navigateScreen());
+    appLifecycleReactor = AppLifecycleReactor(appOpenAdManager: appOpenAdManager, adUnitId: adUnitId);
+    AppLifecycleReactor(appOpenAdManager: appOpenAdManager, adUnitId: adUnitId).listenToAppStateChanges();
   }
 
   /// --------- load common inter -----------------------------------------------------
@@ -133,15 +135,15 @@ class AdsLoadUtil {
   InterstitialAd? splashInterAd;
 
   /// -------------------- Splash inter loading ------------------------
-  Future<void> loadInterSplash(Function() loadPreLoadAds, Function() navigateScreen, String adUnitId, {required bool enable}) async {
+  /// [appOpenAdUnitId]: the app's splash app open id; not "11" → the app open ad instead of the interstitial (IPTV).
+  Future<void> loadInterSplash(Function() loadPreLoadAds, Function() navigateScreen, String adUnitId, {required bool enable, String appOpenAdUnitId = "11"}) async {
     showLog('>> SHOW INTER CALL <<');
-    showLog('AdsVariable.appOpenSplash >>${AdsVariable.appOpenSplash}');
-    showLog('AdsVariable.appOpenAds >>${AdsVariable.appOpenAds}');
+    showLog('appOpenAdUnitId >>$appOpenAdUnitId');
 
     if (!AdsVariable.isPurchase.value && AdsVariable.isFirstTimeVisited != null) {
-      if (AdsVariable.appOpenSplash != "11") {
+      if (appOpenAdUnitId != "11") {
         await loadPreLoadAds();
-        await loadAppOpenSplash(() => navigateScreen());
+        await loadAppOpenSplash(appOpenAdUnitId, () => navigateScreen());
       } else {
         await loadPreLoadAds();
         InterstitialAd.load(
@@ -246,98 +248,6 @@ class AdsLoadUtil {
     );
     await nativeAd!.load();
     return nativeAd!;
-  }
-
-  /// -------------------- AppOPen ads load -----------------------------
-  // ignore: non_constant_identifier_names
-  InterstitialAd? IntroPremiumInterAd;
-
-  /// -------------------- IntroPremium OpenAds loading ------------------------
-  Future<void> loadAppOpenIntroPremium(Function() navigateScreen, bool isIntro) async {
-    AppOpenAdManager().loadIntroPremiumAd(isIntro ? AdsVariable.appOpenIntro : AdsVariable.appOpenPremium, () => navigateScreen());
-  }
-
-  /// -------------------- IntroPremium inter loading ------------------------
-  Future<void> loadInterIntroPremium(Function() navigateScreen, String adUnitId, bool isIntro, {required bool enable}) async {
-    showLog('>> SHOW INTER CALL <<');
-    showLog('AdsVariable.appOpenSplash >>${AdsVariable.appOpenSplash}');
-
-    if (!AdsVariable.isPurchase.value) {
-      if ((isIntro ? AdsVariable.appOpenIntro : AdsVariable.appOpenPremium) != "11") {
-        await loadAppOpenIntroPremium(() => navigateScreen(), isIntro);
-      } else {
-        if (adUnitId != "11") {
-          loadingScreen.show();
-          InterstitialAd.load(
-            adUnitId: adUnitId,
-            request: const AdRequest(),
-            adLoadCallback: InterstitialAdLoadCallback(
-              // Called when an ad is successfully received.
-              onAdLoaded: (ad) {
-                ad.setImmersiveMode(true);
-                ad.fullScreenContentCallback = FullScreenContentCallback(
-                  // Called when the ad showed the full screen content.
-                  onAdShowedFullScreenContent: (ad) async {
-                    showLog("onAdShowedFullScreenContent loadInterIntroPremium");
-                  },
-                  // Called when an impression occurs on the ad.
-                  onAdImpression: (ad) async {
-                    showLog("onAdImpression loadInterIntroPremium");
-                    Future.delayed(const Duration(seconds: 1)).then((value) {
-                      navigateScreen();
-                    });
-                  },
-                  // Called when the ad failed to show full screen content.
-                  onAdFailedToShowFullScreenContent: (ad, err) async {
-                    // Dispose the ad here to free resources.
-                    ad.dispose();
-                    showLog("onAdFailedToShowFullScreenContent loadInterIntroPremium");
-                  },
-                  // Called when the ad dismissed full screen content.
-                  onAdDismissedFullScreenContent: (ad) async {
-                    // Dispose the ad here to free resources.
-                    ad.dispose();
-                    IntroPremiumInterAd = null;
-                    showLog("onAdDismissedFullScreenContent loadInterIntroPremium");
-                  },
-                  // Called when a click is recorded for an ad.
-                  onAdClicked: (ad) {
-                    showLog("onAdClicked loadInterIntroPremium");
-                  },
-                );
-
-                showLog('$ad loaded.loadInterIntroPremium ');
-                // Keep a reference to the ad so you can show it later.
-
-                IntroPremiumInterAd = ad;
-                ad.onPaidEvent = (Ad ad, double valueMicros, PrecisionType precision, String currencyCode) {
-                  AdsLoadUtil.sendRevenueToAnalytics(valueMicros, currencyCode, precision, enable);
-                };
-                loadingScreen.hide();
-                Future.delayed(const Duration(seconds: 0)).then((value) {
-                  IntroPremiumInterAd!.show();
-                });
-              },
-
-              // Called when an ad request failed.
-              onAdFailedToLoad: (LoadAdError error) async {
-                showLog('InterstitialAd failed to load loadInterIntroPremium: $error');
-                loadingScreen.hide();
-                navigateScreen();
-              },
-            ),
-          );
-        } else {
-          Future.delayed(const Duration(seconds: 2)).then((value) {
-            navigateScreen();
-          });
-        }
-      }
-    } else {
-      Future.delayed(const Duration(seconds: 4)).then((value) {
-        navigateScreen();
-      });
-    }
   }
 }
 

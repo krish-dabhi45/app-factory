@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 
-import 'ads_variable.dart';
-
-/// IPTV_two `lib/AdsUtils/loading_screen.dart`, ported to plain Flutter: `Get.context` → [AdsVariable.navigatorKey],
+/// IPTV_two `lib/AdsUtils/loading_screen.dart`, ported to plain Flutter: `Get.context` → the caller's [BuildContext],
 /// `Get.width/height` → MediaQuery, `15.w` → 15 × width / 1242 (IPTV's ScreenUtil design width).
+/// One dialog at a time: a [show] while it is up does nothing, and [hide] pops only that dialog (IPTV pops whatever
+/// route is on top).
 class LoadingScreen {
-  bool _shown = false;
+  NavigatorState? _navigator;
 
-  void show([String? text]) {
-    final context = AdsVariable.navigatorKey.currentContext;
-    if (context == null) return;
-    _shown = true;
+  void show(BuildContext context, [String? text]) {
+    if (_navigator != null) return;
+    _navigator = Navigator.of(context, rootNavigator: true);
     showDialog<String>(
       context: context,
       builder: (BuildContext context) {
@@ -50,11 +49,8 @@ class LoadingScreen {
   }
 
   void hide() {
-    final navigator = AdsVariable.navigatorKey.currentState;
-    // IPTV pops whatever is on top (Navigator.pop(Get.context!)); only our own dialog is popped here.
-    if (navigator == null || !_shown) return;
-    _shown = false;
-    navigator.pop();
+    _navigator?.pop();
+    _navigator = null;
   }
 }
 

@@ -6,12 +6,14 @@ import 'app_open_ad.dart';
 import 'app_variable.dart';
 
 /// IPTV_two `lib/ads/life_cycle.dart`: only the imports, `debugPrint` → showLog, the identical-branch
-/// `Platform.isAndroid ? x : x` → x, and the commented-out code dropped.
+/// `Platform.isAndroid ? x : x` → x, and the commented-out code dropped; the app open id is the app's [adUnitId]
+/// (IPTV read `AdsVariable.appOpenAds`).
 /// Listens for app foreground events and shows app open ads.
 class AppLifecycleReactor {
   final AppOpenAdManager appOpenAdManager;
+  final String adUnitId;
 
-  AppLifecycleReactor({required this.appOpenAdManager});
+  AppLifecycleReactor({required this.appOpenAdManager, required this.adUnitId});
 
   void listenToAppStateChanges() {
     AppStateEventNotifier.startListening();
@@ -20,11 +22,11 @@ class AppLifecycleReactor {
 
   void onAppStateChanged(AppState appState) {
     if (appState == AppState.foreground) {
-      appOpenAdManager.showAdIfAvailable(AdsVariable.appOpenAds);
+      appOpenAdManager.showAdIfAvailable(adUnitId);
       showLog("App State :- $appState");
     } else if (appState == AppState.background) {
-      if (!AppOpenAdManager().isAdAvailable && AdsVariable.appOpenAds != "11" && !AdsVariable.isPurchase.value && !AdsVariable.isShowingAd.value) {
-        AdsSplashUtils().loadAppOpenAd();
+      if (!AppOpenAdManager().isAdAvailable && adUnitId != "11" && !AdsVariable.isPurchase.value && !AdsVariable.isShowingAd.value) {
+        AdsSplashUtils().loadAppOpenAd(adUnitId);
       }
       showLog("App State :- $appState");
     }

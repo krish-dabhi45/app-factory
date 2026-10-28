@@ -1,14 +1,17 @@
 import 'dart:developer';
 
-import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 import 'ads_variable.dart';
 import 'app_variable.dart';
-import 'loading_screen.dart';
 
-/// IPTV_two `lib/ads/app_open_ad.dart`, ported to plain Flutter: `Get.to(const EmptyScreen())` → a push on
-/// [AdsVariable.navigatorKey], `Get.back()` → its pop. Commented-out code not ported.
+/// IPTV_two `lib/ads/app_open_ad.dart`. Every ad id is the caller's (IPTV read `AdsVariable.appOpenIntro` in
+/// [showOpenAdIntroPremium]). Not ported: commented-out code; `loadIntroPremiumAd`, which only IPTV's uncalled
+/// `loadAppOpenIntroPremium` used; and IPTV's black `EmptyScreen` (`Get.to` when an app open ad shows, `Get.back()` when
+/// it closes, app_open_ad.dart:69/85/129/142): nothing in IPTV reads that route, the ad covers the screen anyway, and
+/// its `Get.back()` popped a real screen — the app's own when the ad closed within the 1 s before the push (:128-130),
+/// the screen the splash had just opened (:68-69, the navigation is async, so `Get.offAll` removes the black screen
+/// first).
 /// Utility class that manages loading and showing app open ads.
 class AppOpenAdManager {
   bool get isAdAvailable {
@@ -20,9 +23,6 @@ class AppOpenAdManager {
 
   /// Keep track of load time so we don't show an expired ad.
   DateTime? _appOpenLoadTime;
-
-  static void _toEmptyScreen() => AdsVariable.navigatorKey.currentState?.push(MaterialPageRoute<void>(builder: (_) => const EmptyScreen()));
-  static void _back() => AdsVariable.navigatorKey.currentState?.pop(); // Get.back(): pops the top route
 
   /// Load an AppOpenAd.
   Future<void> loadAd(String addId) async {
@@ -71,7 +71,6 @@ class AppOpenAdManager {
         showLog('$ad onAdShowedFullScreenContent-==-');
         showLog("FullScreenContentCallback-=-");
         navigateScreen();
-        _toEmptyScreen();
       },
       onAdFailedToShowFullScreenContent: (ad, error) {
         showLog('$ad onAdFailedToShowFullScreenContent===: $error');
@@ -80,7 +79,6 @@ class AppOpenAdManager {
         navigateScreen();
       },
       onAdDismissedFullScreenContent: (ad) {
-        _back();
         showLog('$ad onAdDismissedFullScreenContent==');
         ad.dispose();
         AdsVariable.appOpenAdSplash = null;
@@ -121,9 +119,6 @@ class AppOpenAdManager {
         AdsVariable.isShowingAd.value = true;
         showLog('$ad onAdShowedFullScreenContent');
         log("FullScreenContentCallback");
-        Future.delayed(const Duration(seconds: 1), () {
-          _toEmptyScreen();
-        });
       },
       onAdFailedToShowFullScreenContent: (ad, error) {
         showLog('$ad onAdFailedToShowFullScreenContent: $error');
@@ -133,7 +128,6 @@ class AppOpenAdManager {
         loadAd(adId);
       },
       onAdDismissedFullScreenContent: (ad) {
-        _back();
         showLog('$ad onAdDismissedFullScreenContent');
         AdsVariable.isShowingAd.value = false;
         ad.dispose();
@@ -142,29 +136,6 @@ class AppOpenAdManager {
       },
     );
     await AdsVariable.appOpenAd!.show();
-  }
-
-  /// Load Intro Premium Ads
-  Future<void> loadIntroPremiumAd(String addId, Function() navigateScreen) async {
-    loadingScreen.show();
-    await AppOpenAd.load(
-      adUnitId: addId,
-      request: const AdRequest(),
-      adLoadCallback: AppOpenAdLoadCallback(
-        onAdLoaded: (ad) {
-          _appOpenLoadTime = DateTime.now();
-          AdsVariable.appOpenAdIntroPremium = ad;
-          loadingScreen.hide();
-          showOpenAdIntroPremium(() => navigateScreen());
-          showLog('${AdsVariable.appOpenAdIntroPremium} appOpen loadSplahsAd');
-        },
-        onAdFailedToLoad: (error) {
-          loadingScreen.hide();
-          navigateScreen();
-          showLog('AppOpenAd failed to loadSplahsAd: $error');
-        },
-      ),
-    );
   }
 
   Future<void> loadIntroPremiumAdOnly(String addId) async {
@@ -184,7 +155,8 @@ class AppOpenAdManager {
     );
   }
 
-  Future<void> showOpenAdIntroPremium(Function() navigateScreen) async {
+  /// [addId]: the same id [loadIntroPremiumAdOnly] loaded; loaded again after the ad (IPTV).
+  Future<void> showOpenAdIntroPremium(String addId, Function() navigateScreen) async {
     if (AdsVariable.appOpenAdIntroPremium == null) {
       navigateScreen();
       return;
@@ -197,7 +169,7 @@ class AppOpenAdManager {
       onAdFailedToShowFullScreenContent: (ad, error) {
         showLog('$ad onAdFailedToShowFullScreenContent===: $error');
         ad.dispose();
-        loadIntroPremiumAdOnly(AdsVariable.appOpenIntro);
+        loadIntroPremiumAdOnly(addId);
         AdsVariable.appOpenAdIntroPremium = null;
         navigateScreen();
       },
@@ -206,7 +178,7 @@ class AppOpenAdManager {
 
         ad.dispose();
 
-        loadIntroPremiumAdOnly(AdsVariable.appOpenIntro);
+        loadIntroPremiumAdOnly(addId);
         AdsVariable.appOpenAdIntroPremium = null;
 
         // NOW ad is completely closed
@@ -215,14 +187,5 @@ class AppOpenAdManager {
       },
     );
     await AdsVariable.appOpenAdIntroPremium!.show();
-  }
-}
-
-class EmptyScreen extends StatelessWidget {
-  const EmptyScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const SafeArea(child: Scaffold(backgroundColor: Colors.black));
   }
 }

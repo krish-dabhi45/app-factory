@@ -14,19 +14,20 @@ Package _pkg(String id, PackageType type) => Package(
     );
 
 void main() {
+  // the app's values by key, as the generated AdsVariable.valueOf gives them
+  var values = <String, Object>{};
   setUp(() {
     AdsVariable.isPurchase.value = false;
-    AdsVariable.showWeeklyPlan = true;
-    AdsVariable.showYearlyPlan = true;
-    AdsVariable.premiumShow = "1";
-    AdsVariable.useCount = 2;
+    values = {"showWeeklyPlan": true, "showYearlyPlan": true, "premiumShow": "1", "useCount": 2};
+    PremiumValues.value = (k) => values[k];
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('IPTV showWeeklyPlan / showYearlyPlan hide those plans; other types have no IPTV key and show', () {
-    AdsVariable.showWeeklyPlan = false;
+  test('show<Plan>Plan false or "0" hides that plan; a plan type with no key shows', () {
+    values["showWeeklyPlan"] = false;
+    values["showMonthlyPlan"] = "0";
     expect([PackageType.weekly, PackageType.annual, PackageType.lifetime, PackageType.monthly].map(PremiumValues.showPlan),
-        [false, true, true, true]);
+        [false, true, true, false]);
   });
 
   test('useCount is a whole number >= 0, else no limit; premiumShow "0" = no limit', () {
@@ -35,10 +36,13 @@ void main() {
     expect(parseLimit(''), isNull);
     expect(parseLimit('-1'), isNull);
     expect(parseLimit('two'), isNull);
-    AdsVariable.useCount = 3;
+    values["useCount"] = 3;
     expect(PremiumValues.freeUses('export'), 3);
-    AdsVariable.premiumShow = "0";
+    values["premiumShow"] = "0";
     expect(PremiumValues.freeUses('export'), isNull, reason: 'IPTV checkPurchaseNormal: premiumShow "0" = no paywall');
+    values.remove("premiumShow");
+    values.remove("useCount");
+    expect(PremiumValues.freeUses('export'), isNull, reason: 'an app without these keys: no limit');
   });
 
   test('the paywall shows the switched-on plans in the offering\'s order, never an empty list', () {
@@ -76,6 +80,7 @@ void main() {
   });
 
   test('FreeUseGate never limits when there is no useCount', () async {
+    values.remove("useCount");
     var runs = 0;
     for (var i = 0; i < 5; i++) {
       await FreeUseGate.run('share', action: () async => runs++, openPaywall: () async => fail('no paywall without a limit'));

@@ -122,7 +122,7 @@ show(x); check(x.res.stage !== 'figma' && x.calls.includes('contract'), 'no ques
 x = await sim('build: parallel, clean run', { stage: 'build' })
 show(x)
 check(x.calls.indexOf('interface') < x.calls.indexOf('logic: items'), 'interface before the groups')
-check(/If CONTRACT\.md section 9 \(Ads\) lists placements, install the ads \+ Remote Config pattern only this way: `node "[^"]+\/scripts\/ads-install\.mjs"/.test(x.prompts.interface) && !/has an "Ads" section/.test(Object.values(x.prompts).join()), 'the interface step installs ads when section 9 lists placements (a "Not in scope" section 9 does not count)')
+check(/If CONTRACT\.md section 9 \(Ads\) lists placements, write remote_config\.json first — the app's own keys[^`]*then install the ads \+ Remote Config pattern only this way: `node "[^"]+\/scripts\/ads-install\.mjs"/.test(x.prompts.interface) && !/has an "Ads" section/.test(Object.values(x.prompts).join()), 'the interface step writes the app\'s own config.json, then installs ads, when section 9 lists placements (a "Not in scope" section 9 does not count)')
 check(['logic: items', 'ui: items', 'tests: items'].every((l) => x.calls.includes(l)), 'logic ∥ UI ∥ tests per group')
 check(x.calls.filter((c) => c.startsWith('test r1 iOS runner')).length === 3, '3 iOS runners (4000 MB free)')
 check(x.calls.includes('test r1 Android runner'), 'Android runner')

@@ -2,30 +2,23 @@ import 'package:purchases_flutter/purchases_flutter.dart';
 
 import '../ads/ads_variable.dart';
 
-/// Premium switches: IPTV's Remote Config keys, read into AdsVariable by AdsSplashUtils.getOnlineIds
-/// (IPTV `ads_splash_utils.dart:45-55`, `:130-140`). Changed online, no app update needed.
+/// Premium switches, read by key from the app's Remote Config values (the generated `AdsVariable.valueOf`), so the
+/// layer works with whichever of these keys the app has: `show<Plan>Plan` (IPTV `showWeeklyPlan` / `showYearlyPlan`,
+/// false or "0" hides that plan), `premiumShow` ("0" = no paywall from usage) and `useCount` (free uses per feature;
+/// IPTV `checkPurchaseNormal`, utils/app_variable.dart:93-110). A key the app does not have: plan shown, no limit.
 class PremiumValues {
   PremiumValues._();
 
-  /// IPTV: `showWeeklyPlan`, `showYearlyPlan` (false hides that plan). Other plan types have no IPTV key: shown.
-  static bool showPlan(PackageType type) => switch (type) {
-        PackageType.weekly => AdsVariable.showWeeklyPlan,
-        PackageType.annual => AdsVariable.showYearlyPlan,
-        _ => true,
-      };
+  /// The app's value of a Remote Config key, null when it has no such key. A test replaces it.
+  static Object? Function(String key) value = AdsVariable.valueOf;
 
-  /// IPTV `checkPurchaseNormal` (utils/app_variable.dart:93-110): `premiumShow` "0" = no paywall from usage;
-  /// otherwise `useCount` free uses per feature.
-  static int? freeUses(String feature) => AdsVariable.premiumShow != "0" ? AdsVariable.useCount : null;
+  static bool showPlan(PackageType type) => !const [false, "0"].contains(value(planKey(type)));
 
-  /// `showIntro` "1" = the intro on the first launch (IPTV splash_screen.dart:84).
-  static bool get showIntro => AdsVariable.showIntro == "1";
-
-  /// `showShareBtn` / `showRateBtn` / `showPrivacyBtn` "1" = that settings row (IPTV setting_screen.dart:72, 96, 117).
-  /// Restore and Terms of Use are never switchable; the paywall always links Privacy Policy and Terms (store rules).
-  static bool get showShareBtn => AdsVariable.showShareBtn == "1";
-  static bool get showRateBtn => AdsVariable.showRateBtn == "1";
-  static bool get showPrivacyBtn => AdsVariable.showPrivacyBtn == "1";
+  static int? freeUses(String feature) {
+    if (value('premiumShow')?.toString() == "0") return null;
+    final n = value('useCount');
+    return n is int && n >= 0 ? n : null;
+  }
 }
 
 /// annual -> "showYearlyPlan" (IPTV name), weekly -> "showWeeklyPlan", sixMonth -> "showSixMonthPlan" ...

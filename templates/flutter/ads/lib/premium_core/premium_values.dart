@@ -1,29 +1,31 @@
 import 'package:purchases_flutter/purchases_flutter.dart';
 
-import '../google_ads_material/ads_id.dart';
+import '../ads/ads_variable.dart';
 
-/// Premium switches, read from the same Remote Config JSON key as the ads
-/// (RemoteConfigLoader.load -> AdsId). Changed online, no app update needed.
-/// Defaults: assets/remote_config_default.json.
+/// Premium switches: IPTV's Remote Config keys, read into AdsVariable by AdsSplashUtils.getOnlineIds
+/// (IPTV `ads_splash_utils.dart:45-55`, `:130-140`). Changed online, no app update needed.
 class PremiumValues {
   PremiumValues._();
 
-  /// `show<Plan>Plan` (IPTV: showWeeklyPlan, showYearlyPlan): false / "0" hides that RevenueCat package
-  /// type on the paywall. Missing = shown. Names: [planKey].
-  static bool showPlan(PackageType type) => !const {'0', 'false'}.contains(AdsId.get(planKey(type), '1'));
+  /// IPTV: `showWeeklyPlan`, `showYearlyPlan` (false hides that plan). Other plan types have no IPTV key: shown.
+  static bool showPlan(PackageType type) => switch (type) {
+        PackageType.weekly => AdsVariable.showWeeklyPlan,
+        PackageType.annual => AdsVariable.showYearlyPlan,
+        _ => true,
+      };
 
-  /// Free uses of a paid feature before the paywall (IPTV checkPurchaseNormal): `useCount` uses per feature,
-  /// counted per feature. `premiumShow` "0" = no paywall from usage (no limit). Missing / invalid useCount = no limit.
-  static int? freeUses(String feature) => AdsId.isOn('premiumShow', '1') ? parseLimit(AdsId.get('useCount', '')) : null;
+  /// IPTV `checkPurchaseNormal` (utils/app_variable.dart:93-110): `premiumShow` "0" = no paywall from usage;
+  /// otherwise `useCount` free uses per feature.
+  static int? freeUses(String feature) => AdsVariable.premiumShow != "0" ? AdsVariable.useCount : null;
 
-  /// `showIntro`: "0" skips the intro on the first launch.
-  static bool get showIntro => AdsId.isOn('showIntro', '1');
+  /// `showIntro` "1" = the intro on the first launch (IPTV splash_screen.dart:84).
+  static bool get showIntro => AdsVariable.showIntro == "1";
 
-  /// `showShareBtn` / `showRateBtn` / `showPrivacyBtn`: "0" hides that settings row.
+  /// `showShareBtn` / `showRateBtn` / `showPrivacyBtn` "1" = that settings row (IPTV setting_screen.dart:72, 96, 117).
   /// Restore and Terms of Use are never switchable; the paywall always links Privacy Policy and Terms (store rules).
-  static bool get showShareBtn => AdsId.isOn('showShareBtn', '1');
-  static bool get showRateBtn => AdsId.isOn('showRateBtn', '1');
-  static bool get showPrivacyBtn => AdsId.isOn('showPrivacyBtn', '1');
+  static bool get showShareBtn => AdsVariable.showShareBtn == "1";
+  static bool get showRateBtn => AdsVariable.showRateBtn == "1";
+  static bool get showPrivacyBtn => AdsVariable.showPrivacyBtn == "1";
 }
 
 /// annual -> "showYearlyPlan" (IPTV name), weekly -> "showWeeklyPlan", sixMonth -> "showSixMonthPlan" ...

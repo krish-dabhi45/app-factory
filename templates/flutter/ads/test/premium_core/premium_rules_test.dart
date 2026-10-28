@@ -2,8 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:common_flow_demo/google_ads_material/ad_flags.dart';
-import 'package:common_flow_demo/google_ads_material/ads_id.dart';
+import 'package:common_flow_demo/ads/ads_variable.dart';
 import 'package:common_flow_demo/premium_core/free_use_gate.dart';
 import 'package:common_flow_demo/premium_core/premium_values.dart';
 
@@ -16,18 +15,18 @@ Package _pkg(String id, PackageType type) => Package(
 
 void main() {
   setUp(() {
-    AdFlags.isPremium = false;
-    AdsId.setJson({});
+    AdsVariable.isPurchase.value = false;
+    AdsVariable.showWeeklyPlan = true;
+    AdsVariable.showYearlyPlan = true;
+    AdsVariable.premiumShow = "1";
+    AdsVariable.useCount = 2;
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('show<Plan>Plan: IPTV names, false or "0" hides, missing shows', () {
-    expect(planKey(PackageType.annual), 'showYearlyPlan');
-    expect(planKey(PackageType.weekly), 'showWeeklyPlan');
-    expect(planKey(PackageType.sixMonth), 'showSixMonthPlan');
-    AdsId.setJson({'showWeeklyPlan': false, 'showYearlyPlan': true, 'showLifetimePlan': '0'});
+  test('IPTV showWeeklyPlan / showYearlyPlan hide those plans; other types have no IPTV key and show', () {
+    AdsVariable.showWeeklyPlan = false;
     expect([PackageType.weekly, PackageType.annual, PackageType.lifetime, PackageType.monthly].map(PremiumValues.showPlan),
-        [false, true, false, true]);
+        [false, true, true, true]);
   });
 
   test('useCount is a whole number >= 0, else no limit; premiumShow "0" = no limit', () {
@@ -36,10 +35,10 @@ void main() {
     expect(parseLimit(''), isNull);
     expect(parseLimit('-1'), isNull);
     expect(parseLimit('two'), isNull);
-    AdsId.setJson({'useCount': 3, 'premiumShow': '1'});
+    AdsVariable.useCount = 3;
     expect(PremiumValues.freeUses('export'), 3);
-    AdsId.setJson({'useCount': 3, 'premiumShow': '0'});
-    expect(PremiumValues.freeUses('export'), isNull);
+    AdsVariable.premiumShow = "0";
+    expect(PremiumValues.freeUses('export'), isNull, reason: 'IPTV checkPurchaseNormal: premiumShow "0" = no paywall');
   });
 
   test('the paywall shows the switched-on plans in the offering\'s order, never an empty list', () {
@@ -59,11 +58,10 @@ void main() {
   });
 
   test('FreeUseGate counts each free use and opens the paywall at the limit', () async {
-    AdsId.setJson({'useCount': 2, 'premiumShow': '1'});
     var runs = 0, paywalls = 0;
     Future<bool> use({bool buys = false}) => FreeUseGate.run('export', action: () async => runs++, openPaywall: () async {
           paywalls++;
-          if (buys) AdFlags.isPremium = true;
+          if (buys) AdsVariable.isPurchase.value = true;
         });
 
     expect(await use(), isTrue);

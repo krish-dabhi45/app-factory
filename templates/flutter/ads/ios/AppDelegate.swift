@@ -14,30 +14,36 @@ import google_mobile_ads
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    // Native ad factories (Flutter NativeFactory.small / .big, Android: MainActivity.kt)
-    FLTGoogleMobileAdsPlugin.registerNativeAdFactory(
-      engineBridge.pluginRegistry, factoryId: "smallNative", nativeAdFactory: TemplateNativeAdFactory(big: false))
-    FLTGoogleMobileAdsPlugin.registerNativeAdFactory(
-      engineBridge.pluginRegistry, factoryId: "bigNative", nativeAdFactory: TemplateNativeAdFactory(big: true))
+    // Native ad factories with IPTV's ids (Flutter AdsLoadUtil.loadNative; Android: NativeAds.kt). IPTV has none on
+    // iOS, so its natives never show there: this is app-factory's one addition. Their colours come from the same
+    // "nativeChannel" → "setToast" call as on Android (AdsSplashUtils.setupFbAdsId); Facebook is Android-only, as in IPTV.
+    let registry = engineBridge.pluginRegistry
+    for (id, kind) in [("smallNativeAds", NativeKind.small), ("bigNativeAds", .big), ("fullNativeAds", .full)] {
+      FLTGoogleMobileAdsPlugin.registerNativeAdFactory(registry, factoryId: id, nativeAdFactory: TemplateNativeAdFactory(kind: kind))
+    }
+    if let registrar = registry.registrar(forPlugin: "nativeChannel") {
+      FlutterMethodChannel(name: "nativeChannel", binaryMessenger: registrar.messenger()).setMethodCallHandler { call, result in
+        if call.method == "setToast", let args = call.arguments as? [String: Any] { NativeAdStyle.options = args }
+        result(true)
+      }
+    }
   }
 }
 
-// MARK: - Native ads (google_ads_material/native_ad_manager.dart)
+// MARK: - Native ads (lib/ads/ads_load_util.dart loadNative)
 
-/// Native ad ke colors Firebase Remote Config se (Flutter: AdsId.nativeColors -> customOptions).
-/// Keys aur defaults Android NativeAdStyle.kt jaise hi.
-struct NativeAdStyle {
-  let options: [AnyHashable: Any]
+enum NativeKind { small, big, full }
 
-  private func str(_ key: String, _ def: String) -> String {
+/// The colours of the last "setToast" (IPTV's keys; values "#RRGGBB" as Android's Color.parseColor takes them).
+enum NativeAdStyle {
+  static var options: [String: Any] = [:]
+
+  private static func str(_ key: String, _ def: String) -> String {
     let v = ((options[key] as? String) ?? "").trimmingCharacters(in: .whitespaces)
     return v.isEmpty ? def : v
   }
 
-  /// "#RRGGBB", "RRGGBB" ya "AARRGGBB" (Android Color.parseColor jaisa). Galat value -> default.
-  func color(_ key: String, _ def: String) -> UIColor {
-    NativeAdStyle.parse(str(key, def)) ?? NativeAdStyle.parse(def)!
-  }
+  static func color(_ key: String, _ def: String) -> UIColor { parse(str(key, def)) ?? parse(def)! }
 
   static func parse(_ raw: String) -> UIColor? {
     let hex = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
@@ -48,17 +54,15 @@ struct NativeAdStyle {
       blue: CGFloat(v & 0xFF) / 255, alpha: a)
   }
 
-  var background: UIColor { color("nativeBGColor", "222222") }
-  var header: UIColor { color("headerTextColor", "FFFFFF") }
-  var body: UIColor { color("bodyTextColor", "DDDDDD") }
-  var buttonText: UIColor { color("btnTextColor", "000000") }
-  var badgeBackground: UIColor { color("btnAdBgColor", "FFB300") }
-  var badgeText: UIColor { color("btnAdTextColor", "FFFFFF") }
-  /// CTA gradient (IPTV MainActivity.kt:316-328): top-right btnBgColor2 -> bottom-left btnBgColor1 (dono same = solid),
-  /// corner 10.
-  var buttonColors: [CGColor] {
-    [color("btnBgColor2", "FFFFFF").cgColor, color("btnBgColor1", "FFFFFF").cgColor]
-  }
+  // defaults = IPTV AdsVariable's (lib/ads/ads_variable.dart)
+  static var background: UIColor { color("nativeBGColor", "#342F38") }
+  static var header: UIColor { color("headerTextColor", "#FFFFFF") }
+  static var body: UIColor { color("bodyTextColor", "#FFFFFF") }
+  static var buttonText: UIColor { color("btnTextColor", "#FFFFFF") }
+  static var badgeBackground: UIColor { color("btnAdBgColor", "#FFFFFF") }
+  static var badgeText: UIColor { color("btnAdTextColor", "#1A1A2F") }
+  /// CTA gradient as IPTV's factories: top-right btnBgColor2 → bottom-left btnBgColor1, corner 10.
+  static var buttonColors: [CGColor] { [color("btnBgColor2", "#C93EA2").cgColor, color("btnBgColor1", "#6F34FF").cgColor] }
 }
 
 final class GradientButton: UIButton {
@@ -66,16 +70,15 @@ final class GradientButton: UIButton {
   var gradient: CAGradientLayer { layer as! CAGradientLayer }
 }
 
-/// Flutter factoryId "smallNative" (big false, height 150) — Android native_small.xml jaisa (IPTV native_admob_small.xml):
-/// icon 48 | "Ad" badge + headline, advertiser + stars, body (2 lines); CTA full width 40.
-/// Flutter factoryId "bigNative" (big true, height 310) — Android native_big.xml jaisa:
-/// media 150 on top (IPTV intro order), then the same row, CTA full width 44.
+/// "smallNativeAds": icon | "Ad" badge + headline, advertiser + stars, body; CTA full width (IPTV native_admob_small.xml).
+/// "bigNativeAds" / "fullNativeAds": media on top, then the same row and CTA (IPTV native_admob_big / full.xml).
 final class TemplateNativeAdFactory: NSObject, FLTNativeAdFactory {
-  let big: Bool
-  init(big: Bool) { self.big = big }
+  let kind: NativeKind
+  init(kind: NativeKind) { self.kind = kind }
+  private var big: Bool { kind != .small }
 
   func createNativeAd(_ nativeAd: NativeAd, customOptions: [AnyHashable: Any]? = nil) -> NativeAdView? {
-    let style = NativeAdStyle(options: customOptions ?? [:])
+    let style = NativeAdStyle.self
     let view = NativeAdView()
     view.backgroundColor = style.background
     let iconSize: CGFloat = 48

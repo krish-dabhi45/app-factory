@@ -82,6 +82,10 @@ export function check(root) {
     if (missing.length && !fs.existsSync(path.join(root, 'lib/firebase_options.dart'))) owner.push(`O4 no ${missing.join(' or ')}: Remote Config, Analytics and Crashlytics run on the defaults there — add the files from the Firebase console`)
   }
   const clear = [['AndroidManifest.xml', /usesCleartextTraffic="true"/.test(manifest)], ['Info.plist', /NSAllowsArbitraryLoads<\/key>\s*<true\/>/.test(plist)]].filter(([, on]) => on).map(([n]) => n)
+  // a release build serves the ad unit ids it is given (IPTV's lib/ads/, the ads template): Google's demo ones show test ads
+  let defaults = {}; try { defaults = JSON.parse(text(root, 'assets/ads/config.json') || '{}') } catch {}
+  const demo = Object.entries(defaults).filter(([, v]) => String(v).startsWith(SAMPLE_ADMOB.slice(0, -1) + '/')).map(([k]) => k)
+  if (demo.length) owner.push(`O6 Google's demo ad units in assets/ads/config.json (${demo.join(', ')}): a release build shows Google test ads from them, which earn nothing — put the app's own ad unit ids there and in the Remote Config parameter`)
   if (clear.length) owner.push(`O5 cleartext HTTP allowed in ${clear.join(' and ')}: keep only if the app must load http:// content, and say why in App Review notes`)
   return { fix, owner }
 }
@@ -110,7 +114,10 @@ function selftest() {
     assert.match(r.fix[1], /location permission in AndroidManifest\.xml and Info\.plist/)
     assert.match(r.fix[2], /lib\/main\.dart:6 calls restorePurchases/, 'the comment on line 4 and premium_core are not flagged')
     assert.match(r.fix[3], /paywall \(lib\/ui\/paywall\.dart:1\) but lib\/ has no a restore\(\) call, a "Terms of Use" text \(/, 'Privacy Policy is there')
-    assert.deepEqual(r.owner.map((l) => l.slice(0, 2)), ['O1', 'O2', 'O3', 'O4', 'O5'], report(r))
+    w('assets/ads/config.json', '{"interSplash": "ca-app-pub-3940256099942544/1033173712", "banner": "11", "nativeHome": "ca-app-pub-1234567890123456/111"}')
+    r = check(root)
+    assert.deepEqual(r.owner.map((l) => l.slice(0, 2)), ['O1', 'O2', 'O3', 'O4', 'O6', 'O5'], report(r))
+    assert.match(r.owner[4], /demo ad units in assets\/ads\/config\.json \(interSplash\)/, '"11" and an own id are not flagged')
     assert.match(r.owner[0], /com\.example\.my_app.*com\.example\.myApp\)/)
     assert.doesNotMatch(r.owner[0], /RunnerTests/)
     // the same app made ready: every list empty
@@ -123,6 +130,7 @@ function selftest() {
     w('lib/ui/paywall.dart', "void init() => PremiumStore.instance.loadPlans();\nvoid r() => PremiumStore.instance.restore();\n")
     w('lib/ui/paywall_view.dart', "final links = [Text('Terms of Use'), Text('Privacy Policy')];\n")
     w('android/app/google-services.json', '{}'); w('ios/Runner/GoogleService-Info.plist', '<plist/>')
+    w('assets/ads/config.json', '{"interSplash": "ca-app-pub-1234567890123456/222", "banner": "11"}')
     r = check(root)
     assert.deepEqual(r, { fix: [], owner: [] }, report(r))
     // a pubspec saved with CRLF line ends parses the same

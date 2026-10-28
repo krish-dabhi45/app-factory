@@ -5,9 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../google_ads_material/ad_flags.dart';
-import '../google_ads_material/ads_id.dart';
-import '../google_ads_material/app_open_ad_manager.dart';
+import '../ads/ads_variable.dart';
 import 'premium_values.dart';
 
 enum BuyOutcome { bought, cancelled, failed }
@@ -30,9 +28,9 @@ class PremiumStore extends ChangeNotifier {
   bool loadingPlans = false;
   String? lastError;
 
-  bool get isPremium => AdFlags.isPremium;
+  bool get isPremium => AdsVariable.isPurchase.value;
 
-  /// Once at startup, before SplashAds.run. An empty key = demo mode: nothing is
+  /// Once at startup, from AdsSplashUtils.fetchPurchase. An empty key = demo mode: nothing is
   /// sold, [demoUnlock] tests the Premium flow (debug builds only). RevenueCat keeps
   /// the last customer info on the device, so Premium also holds offline.
   Future<void> configure({
@@ -84,7 +82,6 @@ class PremiumStore extends ChangeNotifier {
   /// (a consumable such as a credit pack does not).
   Future<BuyOutcome> buy(Package package) async {
     try {
-      AppResumeAdListener.skipNextResume(); // no app open ad on the way back from the store sheet
       final result = await Purchases.purchase(PurchaseParams.package(package));
       _apply(result.customerInfo);
       return BuyOutcome.bought;
@@ -103,8 +100,6 @@ class PremiumStore extends ChangeNotifier {
   Future<RestoreOutcome> restore() async {
     if (!configured) return RestoreOutcome.failed;
     try {
-      // no skipNextResume(): restore leaves no app (Android: a query; iOS: at most a sign-in alert, the app stays in
-      // front), so a skip would only eat the next real resume ad
       final info = await Purchases.restorePurchases();
       _apply(info);
       return _active(info) ? RestoreOutcome.restored : RestoreOutcome.nothingToRestore;
@@ -132,9 +127,11 @@ class PremiumStore extends ChangeNotifier {
   }
 
   void _activate() {
-    if (!AdFlags.isPremium) {
-      AdFlags.isPremium = true;
-      AdsId.disableAllAds(); // every ad id becomes "11", also when Remote Config arrives later
+    if (!AdsVariable.isPurchase.value) {
+      // IPTV on a purchase (AdsUtils/dialog.dart:84-85, ads_splash_utils.dart:326-329)
+      AdsVariable.isFirstTimePurchased = true;
+      AdsVariable.isPurchase.value = true;
+      AdsVariable.resetAdIds();
     }
     notifyListeners();
   }

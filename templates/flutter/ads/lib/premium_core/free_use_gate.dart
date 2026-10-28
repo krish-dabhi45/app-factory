@@ -1,6 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../google_ads_material/ad_flags.dart';
+import '../ads/ads_variable.dart';
 import 'premium_values.dart';
 
 /// true = the feature runs now; false = the paywall opens first.
@@ -27,12 +27,12 @@ class FreeUseGate {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final used = prefs.getInt(_key(feature)) ?? 0;
-    if (!freeUseAllowed(used: used, limit: PremiumValues.freeUses(feature), isPremium: AdFlags.isPremium)) {
+    if (!freeUseAllowed(used: used, limit: PremiumValues.freeUses(feature), isPremium: AdsVariable.isPurchase.value)) {
       await openPaywall();
-      if (!AdFlags.isPremium) return false;
+      if (!AdsVariable.isPurchase.value) return false;
     }
     await action();
-    if (!AdFlags.isPremium) await prefs.setInt(_key(feature), used + 1);
+    if (!AdsVariable.isPurchase.value) await prefs.setInt(_key(feature), used + 1);
     return true;
   }
 }

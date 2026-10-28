@@ -1,25 +1,22 @@
 import 'dart:convert';
 
-import 'package:common_flow_demo/google_ads_material/ad_flags.dart';
-import 'package:common_flow_demo/google_ads_material/ads_consent.dart';
-import 'package:common_flow_demo/google_ads_material/ads_id.dart';
-import 'package:common_flow_demo/google_ads_material/app_hud.dart';
-import 'package:common_flow_demo/google_ads_material/banner_ad_widget.dart';
-import 'package:common_flow_demo/google_ads_material/interstitial_ad_manager.dart';
-import 'package:common_flow_demo/google_ads_material/native_ad_manager.dart';
-import 'package:common_flow_demo/google_ads_material/native_ad_widget.dart';
+import 'package:common_flow_demo/ads/ads_load_util.dart';
+import 'package:common_flow_demo/ads/ads_splash_utils.dart';
+import 'package:common_flow_demo/ads/ads_variable.dart';
+import 'package:common_flow_demo/ads/app_open_ad.dart';
+import 'package:common_flow_demo/ads/banner_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Real SDK, real Google test ads, on a device. Needs internet.
+// The IPTV_two ads layer (lib/ads/) with the real SDK and Google's test ads, on a device with internet:
 // flutter test integration_test/ads_device_test.dart -d <device>
+// The ids are the bundled config.json's (IPTV's): Google's test units for Android.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-
-  late Map<String, dynamic> defaults;
 
   Future<bool> pumpUntil(WidgetTester tester, bool Function() done, {int seconds = 30}) async {
     for (var i = 0; i < seconds * 4; i++) {
@@ -29,137 +26,59 @@ void main() {
     return false;
   }
 
-  Widget app(Widget body, {Widget? bottom}) => MaterialApp(
-        navigatorKey: AppHud.navigatorKey,
-        home: Scaffold(body: body, bottomNavigationBar: bottom),
-      );
+  Widget app(Widget body) => MaterialApp(navigatorKey: AdsVariable.navigatorKey, home: Scaffold(body: body));
 
   setUpAll(() async {
-    defaults = jsonDecode(await rootBundle.loadString('assets/remote_config_default.json')) as Map<String, dynamic>;
-    AdsId.setJson(defaults);
-    await AdsConsent.init();
+    SharedPreferences.setMockInitialValues({});
+    final splash = AdsSplashUtils()..prefs = await SharedPreferences.getInstance();
+    splash.setOnlineIds(jsonDecode(await rootBundle.loadString(AdsSplashUtils.bundledConfig)) as Map<String, dynamic>);
+    setupFbAdsId(); // Android: registers smallNativeAds / bigNativeAds / fullNativeAds with the config's colours
+    await MobileAds.instance.initialize();
   });
 
-  setUp(() {
-    AdsId.useTestIds = true;
-    AdsId.setJson(defaults);
+  testWidgets('interstitial (interPreLoad) loads through loadInterCommon', (tester) async {
+    AdsLoadUtil.commonInterAd = null;
+    await AdsLoadUtil().loadInterCommon(AdsVariable.interPreLoad, enable: true);
+    expect(await pumpUntil(tester, () => AdsLoadUtil.commonInterAd != null), isTrue);
   });
 
-  testWidgets('consent: canRequestAds true here, so MobileAds initialised and adsReady', (tester) async {
-    expect(await ConsentInformation.instance.canRequestAds(), isTrue);
-    expect(AdFlags.adsReady, isTrue);
+  testWidgets('small native (smallNativeAds) loads and is drawn (2688 × 140 / 690) / 1242 of the width tall', (tester) async {
+    AdsLoadUtil.isNativeAdLoaded.value = false;
+    AdsLoadUtil.isNativeAdFailed.value = false;
+    final ad = await AdsLoadUtil().loadNative(AdsVariable.nativeIntroBig, true, false, enable: true);
+    expect(await pumpUntil(tester, () => AdsLoadUtil.isNativeAdLoaded.value), isTrue, reason: 'failed: ${AdsLoadUtil.isNativeAdFailed.value}');
+    await tester.pumpWidget(app(ListView(children: [NativeAdsWidget(showNativeAd: ad, isSmallNative: true, isFullNative: false)])));
+    await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty, seconds: 5);
+    final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    expect(tester.getSize(find.byType(AdWidget)).height, closeTo(width * (2688 * 140 / 690) / 1242, 0.5));
+    await tester.pumpWidget(const SizedBox());
+    ad.dispose();
   });
 
-  testWidgets('adaptive banner loads a Google test ad at the bottom, full width', (tester) async {
-    await tester.pumpWidget(app(const SizedBox.expand(), bottom: const BannerAdWidget()));
-    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'banner loaded');
-    final box = tester.getSize(find.byType(BannerAdWidget));
-    final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
-    expect(box.width, screen.width);
-    expect(box.height, greaterThan(40));
+  testWidgets('big native (bigNativeAds) loads and is drawn (2688 × 250 / 690) / 1242 of the width tall', (tester) async {
+    AdsLoadUtil.isNativeAdLoaded.value = false;
+    AdsLoadUtil.isNativeAdFailed.value = false;
+    final ad = await AdsLoadUtil().loadNative(AdsVariable.nativeIntroBig, false, false, enable: true);
+    expect(await pumpUntil(tester, () => AdsLoadUtil.isNativeAdLoaded.value), isTrue, reason: 'failed: ${AdsLoadUtil.isNativeAdFailed.value}');
+    await tester.pumpWidget(app(ListView(children: [NativeAdsWidget(showNativeAd: ad, isSmallNative: false, isFullNative: false)])));
+    await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty, seconds: 5);
+    final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    expect(tester.getSize(find.byType(AdWidget)).height, closeTo(width * (2688 * 250 / 690) / 1242, 0.5));
+    await tester.pumpWidget(const SizedBox());
+    ad.dispose();
   });
 
-  testWidgets('banner that fails to load gives its space back (no blank gap)', (tester) async {
-    final logs = <String>[];
-    final print = debugPrint;
-    debugPrint = (m, {wrapWidth}) {
-      logs.add(m ?? '');
-      print(m, wrapWidth: wrapWidth);
-    };
-    addTearDown(() => debugPrint = print);
-    AdsId.useTestIds = false;
-    AdsId.setJson({...defaults, 'banner': 'ca-app-pub-0000000000000000/0000000000'});
-    await tester.pumpWidget(app(const SizedBox.expand(), bottom: const BannerAdWidget()));
-    expect(await pumpUntil(tester, () => logs.any((l) => l.startsWith('Banner fail'))), isTrue, reason: 'load failed');
-    await tester.pump(const Duration(seconds: 1));
-    expect(tester.getSize(find.byType(BannerAdWidget)).height, 0, reason: 'collapsed after onAdFailedToLoad');
-    expect(find.byType(AdWidget), findsNothing);
+  testWidgets('banner (BannerWidget, banner id) loads at the standard anchored adaptive size', (tester) async {
+    await tester.pumpWidget(app(Column(children: [const Expanded(child: SizedBox()), BannerWidget(adsId: AdsVariable.banner, enable: true)])));
+    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue);
+    final size = tester.getSize(find.byType(AdWidget));
+    expect(size.height, lessThan(100), reason: 'standard anchored adaptive (50–90 dp), not the large one');
+    await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('small native (factory smallNative, home) loads with the Remote Config colours', (tester) async {
-    AdsId.setJson({...defaults, 'nativeHome': 'ca-app-pub-3940256099942544/2247696110', 'adShowHomeFlag': '1'}); // IPTV ships nativeHome "11"
-    await tester.pumpWidget(app(
-      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 150)]),
-    ));
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0, reason: 'nothing while loading (IPTV)');
-    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 150);
-    await tester.pump(const Duration(seconds: 2)); // native view drawn, visible in the device window
-  });
-
-  testWidgets('home native is kept: switching tabs away and back shows the same ad, no reload (IPTV nativeAdHome)', (tester) async {
-    AdsId.setJson({...defaults, 'nativeHome': 'ca-app-pub-3940256099942544/2247696110', 'adShowHomeFlag': '1'});
-    var tab = 0;
-    late StateSetter setTab;
-    await tester.pumpWidget(app(StatefulBuilder(builder: (_, s) {
-      setTab = s;
-      return tab == 0
-          ? Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.home, height: 150)])
-          : const Center(child: Text('Other tab'));
-    })));
-    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    final first = tester.widget<AdWidget>(find.byType(AdWidget)).ad;
-    for (var round = 0; round < 3; round++) {
-      setTab(() => tab = 1);
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.byType(AdWidget), findsNothing);
-      setTab(() => tab = 0);
-      await tester.pump();
-      expect(tester.getSize(find.byType(NativeAdWidget)).height, 150, reason: 'round $round: shown in the first frame, no reload');
-      expect(identical(tester.widget<AdWidget>(find.byType(AdWidget)).ad, first), isTrue, reason: 'round $round: same ad');
-      await tester.pump(const Duration(seconds: 1));
-    }
-  });
-
-  testWidgets('big native (factory bigNative, intro) loads with its media view', (tester) async {
-    await tester.pumpWidget(app(
-      Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 310)]),
-    ));
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0, reason: 'nothing while loading (IPTV)');
-    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310);
-    await tester.pump(const Duration(seconds: 2));
-  });
-
-  testWidgets('big native with minSpaceLeft: not drawn while the screen is too short (landscape), the same ad back when there is room', (tester) async {
-    var height = 800.0;
-    late StateSetter setHeight;
-    await tester.pumpWidget(app(StatefulBuilder(builder: (context, set) {
-      setHeight = set;
-      return MediaQuery(
-        data: MediaQuery.of(context).copyWith(size: Size(MediaQuery.sizeOf(context).width, height)),
-        child: Column(children: [const Spacer(), NativeAdWidget(slot: NativeAdManager.intro, height: 310, minSpaceLeft: 240)]),
-      );
-    })));
-    expect(await pumpUntil(tester, () => find.byType(AdWidget).evaluate().isNotEmpty), isTrue, reason: 'native loaded');
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310);
-    setHeight(() => height = 384); // the M04's landscape window: 384 - 310 < 240
-    await tester.pump();
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 0);
-    expect(find.byType(AdWidget), findsNothing);
-    setHeight(() => height = 800);
-    await tester.pump(const Duration(seconds: 1));
-    expect(tester.getSize(find.byType(NativeAdWidget)).height, 310, reason: 'the same ad again, no reload');
-    await tester.pump(const Duration(seconds: 2));
-  });
-
-  testWidgets('tap ad: "Loading..." for inAppAdWaitSeconds, an ad that did not load -> goes on, HUD removed', (tester) async {
-    AdsId.useTestIds = false;
-    AdsId.setJson({...defaults, 'interPreLoad': 'ca-app-pub-0000000000000000/0000000000', 'inAppAdWaitSeconds': '1'});
-    await tester.pumpWidget(app(const SizedBox.expand()));
-    final slot = InterstitialSlot('interPreLoad');
-    var done = 0;
-    final watch = Stopwatch()..start();
-    final shown = slot.show(onDone: () => done++, preloadAfter: false, loader: true, openBehind: true);
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Loading...'), findsOneWidget, reason: 'IPTV loader before the tap ad');
-    expect(done, 0);
-    expect(await shown, isFalse);
-    watch.stop();
-    await tester.pump();
-    expect(done, 1);
-    expect(watch.elapsed, greaterThanOrEqualTo(const Duration(seconds: 1)), reason: 'the loader stays the whole wait');
-    expect(watch.elapsed, lessThan(const Duration(seconds: 3)));
-    expect(AppHud.isShowing, isFalse);
+  testWidgets('app open (appOpenAds) loads through AppOpenAdManager.loadAd', (tester) async {
+    AdsVariable.appOpenAd = null;
+    await AppOpenAdManager().loadAd(AdsVariable.appOpenAds);
+    expect(await pumpUntil(tester, () => AdsVariable.appOpenAd != null), isTrue);
   });
 }

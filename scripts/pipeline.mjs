@@ -573,15 +573,15 @@ function deps(root) {
 
 // Every colour written in lib/ must come from the imported design (design/colors.json, written by the design import).
 // Catches Color(0xAARRGGBB), Color.fromARGB, Color.fromRGBO and Material's named Colors.* (except transparent).
-// lib/google_ads_material/ is the installed ads template (flutter-ads skill section 7): its loader and shimmer colours are
-// its own, native-ad colours come from Remote Config — not checked.
+// lib/ads/ is the installed ads template, IPTV_two's ads code (flutter-ads skill section 7): its loader and toast colours
+// are IPTV's, native-ad colours come from Remote Config — not checked.
 function colors(root) {
   const pal = path.join(root, 'design', 'colors.json')
   if (!fs.existsSync(pal)) return 'no design/colors.json (no imported design) — nothing to check'
   const allowed = new Set(JSON.parse(fs.readFileSync(pal, 'utf8')).colors.map((c) => c.hex.toUpperCase().replace(/^#/, '').slice(-6)))
   const hex2 = (n) => Math.round(Number(n)).toString(16).padStart(2, '0').toUpperCase()
   const bad = []
-  for (const f of walk(root).filter((f) => f.startsWith('lib/') && !f.startsWith('lib/google_ads_material/') && f.endsWith('.dart'))) {
+  for (const f of walk(root).filter((f) => f.startsWith('lib/') && !f.startsWith('lib/ads/') && f.endsWith('.dart'))) {
     fs.readFileSync(path.join(root, f), 'utf8').split('\n').forEach((line, i) => {
       const at = `${f}:${i + 1}`
       for (const m of line.matchAll(/Color\(\s*0x([0-9A-Fa-f]{8})\s*\)/g)) if (!allowed.has(m[1].slice(2).toUpperCase())) bad.push(`${at} #${m[1].slice(2).toUpperCase()}`)
@@ -1748,9 +1748,9 @@ flutter:
   fs.writeFileSync(path.join(app, 'lib/theme.dart'), 'const a = Color(0xFF1A73E8); const b = Color.fromARGB(255, 255, 255, 255); const t = Colors.transparent;\n')
   assert.match(run(['colors', '--root', app]), /all colours in lib\/ come from design\/colors.json \(2 design colours\)/)
   fs.writeFileSync(path.join(app, 'lib/bad.dart'), 'final x = Color(0xFF1A74E8);\nfinal y = Colors.red;\nfinal z = Color.fromRGBO(0, 0, 0, 1);\n')
-  fs.mkdirSync(path.join(app, 'lib/google_ads_material'))
-  fs.writeFileSync(path.join(app, 'lib/google_ads_material/app_hud.dart'), 'const c = Color(0x8A000000); final w = Colors.white;\n') // the ads template: not checked
-  assert.throws(() => run(['colors', '--root', app]), (e) => /3 colour\(s\)/.test(e.message) && /lib\/bad.dart:1 #1A74E8/.test(e.message) && /lib\/bad.dart:2 Colors.red/.test(e.message) && /lib\/bad.dart:3 #000000/.test(e.message) && !/google_ads_material/.test(e.message))
+  fs.mkdirSync(path.join(app, 'lib/ads'))
+  fs.writeFileSync(path.join(app, 'lib/ads/loading_screen.dart'), 'const c = Color(0x8A000000); final w = Colors.white;\n') // the ads template: not checked
+  assert.throws(() => run(['colors', '--root', app]), (e) => /3 colour\(s\)/.test(e.message) && /lib\/bad.dart:1 #1A74E8/.test(e.message) && /lib\/bad.dart:2 Colors.red/.test(e.message) && /lib\/bad.dart:3 #000000/.test(e.message) && !/lib\/ads\//.test(e.message))
 
   // cleanup: deletes the run's leftovers only; keeps source, state and unknown files; devices only with the lock
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'clean-'))

@@ -1190,7 +1190,7 @@ PPT `/Users/mach/testing/ai_ppt_generater/lib/screens/onboarding_screen.dart`
                              }
                            },
                            unPressColor: pressColor,
-@@ -131,10 +146,50 @@ class _IntroScreenState extends State<IntroScreen> {
+@@ -131,10 +146,55 @@ class _IntroScreenState extends State<IntroScreen> {
                            buttonTitle: "Continue",
                          ),
                          50.verticalSpace,
@@ -1201,11 +1201,13 @@ PPT `/Users/mach/testing/ai_ppt_generater/lib/screens/onboarding_screen.dart`
                      ),
                    ),
                  ),
-+                if(AdsVariable.nativeIntroBig != "11" && AdsLoadUtil.isNativeAdLoaded.value == true && !AdsVariable.isPurchase.value)
-+                  Positioned(
-+                    top: 50.w,
-+                    right: 50.w,
-+                    child: Obx(() => PressUnPressWidget(child: appText(title: _activePage.value == 2 ? "Done" : "Next", fs: 60.sp, color: pressColor),
++                Positioned.fill( // app-factory F4: built again when the native loads
++                  child: Obx(() => (AdsVariable.nativeIntroBig != "11" && AdsLoadUtil.isNativeAdLoaded.value == true && !AdsVariable.isPurchase.value)
++                    ? Align(
++                        alignment: Alignment.topRight,
++                        child: Padding(
++                          padding: EdgeInsets.only(top: 50.w, right: 50.w),
++                          child: Obx(() => PressUnPressWidget(child: appText(title: _activePage.value == 2 ? "Done" : "Next", fs: 60.sp, color: pressColor),
 +                      onTap: () async {
 +                        if (_activePage.value == 0) {
 +                          _pageController.animateToPage(1, duration: const Duration(milliseconds: 300), curve: Curves.easeIn);
@@ -1237,11 +1239,14 @@ PPT `/Users/mach/testing/ai_ppt_generater/lib/screens/onboarding_screen.dart`
 +                      },
 +                    ),
 +                    ),
-+                  )
++                        ),
++                      )
++                    : const SizedBox.shrink()),
++                )
                ],
              ),
            );
-@@ -154,7 +209,7 @@ class OnboardingPage extends StatelessWidget {
+@@ -154,7 +214,7 @@ class OnboardingPage extends StatelessWidget {
    Widget build(BuildContext context) {
      return Align(
        alignment: .topCenter,

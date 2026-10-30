@@ -25,6 +25,7 @@ import os from 'node:os'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
 const PPT = process.env.ADS_PPT || '/Users/mach/testing/ai_ppt_generater'
 const PRE = process.env.ADS_PRE || '/Users/mach/ads-testing.v2@5ac9743' // <git repo>@<commit>: the PPT app before its ads
@@ -86,6 +87,10 @@ const FIXES = [
   { id: 'F4', file: 'lib/screens/onboarding_screen.dart', why: 'Continue showed only when nativeIntroBig == "11" and Next / Done only once the intro native loaded: an intro native that failed to load left every intro page with no button (device: pages 1-3, no Continue, no Done). Continue now shows whenever Next / Done does not',
     from: '                        if(AdsVariable.nativeIntroBig == "11"/* && AdsLoadUtil.isNativeAdLoaded.value != true && AdsVariable.isPurchase.value*/)\n',
     to: '                        if (!(AdsVariable.nativeIntroBig != "11" && AdsLoadUtil.isNativeAdLoaded.value == true && !AdsVariable.isPurchase.value)) // app-factory F4: Continue whenever Next / Done is not shown\n' },
+  { id: 'F4', file: 'lib/screens/onboarding_screen.dart', why: 'Next / Done is a child of the outer Stack, outside any Obx: its condition was read once, when the screen was built. A native that loads after that (any slower load: device, 2026-10-30, intro with the native on screen and no Next and, with Continue now reactive, no Continue) left no button at all. It is now built again when the native loads; the position (top 50.w, right 50.w) and the button are the team\'s',
+    from: '                if(AdsVariable.nativeIntroBig != "11" && AdsLoadUtil.isNativeAdLoaded.value == true && !AdsVariable.isPurchase.value)\n                  Positioned(\n                    top: 50.w,\n                    right: 50.w,\n                    child: Obx(() => PressUnPressWidget(child: appText(title: _activePage.value == 2 ? "Done" : "Next"',
+    to: '                Positioned.fill( // app-factory F4: built again when the native loads\n                  child: Obx(() => (AdsVariable.nativeIntroBig != "11" && AdsLoadUtil.isNativeAdLoaded.value == true && !AdsVariable.isPurchase.value)\n                    ? Align(\n                        alignment: Alignment.topRight,\n                        child: Padding(\n                          padding: EdgeInsets.only(top: 50.w, right: 50.w),\n                          child: Obx(() => PressUnPressWidget(child: appText(title: _activePage.value == 2 ? "Done" : "Next"' },
+  { id: 'F4', file: 'lib/screens/onboarding_screen.dart', from: '                      },\n                    ),\n                    ),\n                  )\n              ],\n', to: '                      },\n                    ),\n                    ),\n                        ),\n                      )\n                    : const SizedBox.shrink()),\n                )\n              ],\n' },
 ]
 const withFixes = (f, buf) => {
   const mine = FIXES.filter((x) => x.file === f); if (!mine.length) return buf
@@ -148,6 +153,11 @@ function lineDiff(a, b) {
 const [PRE_REPO, PRE_REV] = PRE.split('@')
 const preFiles = () => execFileSync('git', ['-C', PRE_REPO, 'ls-tree', '-r', '--name-only', PRE_REV], { encoding: 'utf8' }).split('\n').filter(Boolean)
 const preRead = (f) => { try { return execFileSync('git', ['-C', PRE_REPO, 'show', `${PRE_REV}:${f}`], { maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null } }
+// The pre-ads commit lived in a temp git dir (ads-testing.v2's shadow.git) that macOS cleaned on 2026-10-30. What the change
+// needs of it is stored in templates/flutter/ads/before/ (every changed file as it was); the rest of the pre-ads app equals
+// the team's build file for file (verified against the commit while it existed; only NOT_ADS differ). A rebuild of the
+// template is rebuilt from the stored before/ when the commit is gone (ADS_PRE=<git repo>@<commit> brings the commit back).
+const preReadable = () => { try { execFileSync('git', ['-C', PRE_REPO, 'cat-file', '-e', `${PRE_REV}^{commit}`], { stdio: 'ignore' }); return true } catch { return false } }
 const pptRead = (f) => fs.existsSync(path.join(PPT, f)) ? fs.readFileSync(path.join(PPT, f)) : null
 // the files the two builds differ in (build output left out)
 export function teamDiff() {
@@ -155,9 +165,9 @@ export function teamDiff() {
   return [...new Set([...pre, ...ppt])].filter((f) => { const a = pre.has(f) ? preRead(f) : null, b = ppt.has(f) ? pptRead(f) : null; return !a || !b || !a.equals(b) }).sort()
 }
 export function reference() {
-  const m = new Map()
+  const m = new Map(), commit = preReadable() // the commit when it can be read, else the stored before/ (the same bytes, kept in the plugin)
   for (const f of CHANGE) {
-    const b = preRead(f), a = pptRead(f)
+    const b = commit ? preRead(f) : tplBuf(`before/${f}`), a = pptRead(f)
     if (!a) throw new Error(`${PPT}/${f} missing`)
     if (b) m.set(`before/${f}`, b)
     m.set(`after/${f}`, withFixes(f, a))
@@ -186,9 +196,10 @@ export function reference() {
 }
 const OWN_TEMPLATE = ['ios', 'config.json'] // app-factory's iOS AppDelegate for an app with no factories; config.json's test values
 function writeTemplate() {
+  const m = reference() // read everything first: before/ is removed and written again below
   for (const d of fs.readdirSync(TEMPLATE)) if (!OWN_TEMPLATE.includes(d)) fs.rmSync(path.join(TEMPLATE, d), { recursive: true, force: true })
-  const m = reference(); for (const [f, t] of m) put(path.join(TEMPLATE, f), t)
-  return `wrote ${m.size} files to templates/flutter/ads/ from ${PRE} (before) and ${PPT} (after)`
+  for (const [f, t] of m) put(path.join(TEMPLATE, f), t)
+  return `wrote ${m.size} files to templates/flutter/ads/ from ${preReadable() ? PRE : 'the stored before/'} (before) and ${PPT} (after)`
 }
 const tplBuf = (f) => fs.existsSync(path.join(TEMPLATE, f)) ? fs.readFileSync(path.join(TEMPLATE, f)) : null
 const tpl = (f) => tplBuf(f)?.toString() ?? null
@@ -614,6 +625,7 @@ const PLACES = [[/\bNativeAdsWidget\(/, 'native'], [/\b(?:Collapsible)?BannerWid
   [/(?<!Future<void>\s)\bonTapInter\(/, 'full-screen: interstitial on tap'], [/(?<!Future<void>\s)\bonTapRewardCall\(/, 'full-screen: rewarded'],
   [/\.showOpenAdIntroPremium\(/, 'full-screen: intro app open'], [/\.loadAppLifecycleReactor\(/, 'full-screen: app open on resume']]
 const SEEN = '.dart_tool/ads_seen.json'
+const CHECKER = 2 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
 export function placements(root, { all = false } = {}) {
   const lib = path.join(root, 'lib'), files = walk(lib).filter((f) => f.endsWith('.dart')).sort(), code = new Map(files.map((f) => [f, blank(read(path.join(lib, f)))]))
   const everything = [...code.values()].join('\n')
@@ -626,6 +638,118 @@ export function placements(root, { all = false } = {}) {
   })))
   return all ? ps : ps.filter((p) => !p.dead)
 }
+// ---- the run must not crash: launch, health, stress ----
+// A run is recorded in .dart_tool/ads_seen.json: `launch` (the build installed and started, its pid), every `seen`, `stress`.
+// health() is read after each of them: the crash buffer, the process (same pid as the launch's), an ANR of the app, an
+// uncaught Dart exception in the ad code, or a framework-caught exception (an overflow, a build error) in lib/ads.
+// A record is valid only for the code it was made on: libHash (every lib/**/*.dart) — a changed line makes it stale.
+const ADB_BIN = () => process.env.ADB || path.join(os.homedir(), 'Library/Android/sdk/platform-tools/adb')
+const adbOut = (serial, ...x) => { try { return execFileSync(ADB_BIN(), ['-s', serial, ...x], { encoding: 'utf8', maxBuffer: 256 << 20, stdio: ['ignore', 'pipe', 'ignore'] }) } catch (e) { return e.stdout?.toString() || '' } }
+const libHash = (root) => { const h = createHash('sha1'), lib = path.join(root, 'lib'); for (const f of walk(lib).filter((x) => x.endsWith('.dart')).sort()) h.update(f).update(fs.readFileSync(path.join(lib, f))); return h.digest('hex').slice(0, 12) }
+const readSeen = (root) => fs.existsSync(path.join(root, SEEN)) ? JSON.parse(read(path.join(root, SEEN))) : {}
+const writeSeen = (root, all) => { fs.mkdirSync(path.join(root, '.dart_tool'), { recursive: true }); fs.writeFileSync(path.join(root, SEEN), JSON.stringify(all, null, 2)) }
+// what in the logcat text is a crash of this app: pure, tested by the selftest with lines taken from a device
+export function logProblems(text, pkg, appName, adFiles) {
+  const ls = text.split('\n'), out = new Set()
+  const frames = (i) => ls.slice(i, i + 30).flatMap((x) => [...x.matchAll(new RegExp(`(?:package:${appName}/|\\blib/)([\\w/.]+\\.dart):(\\d+)`, 'g'))].map((m) => `lib/${m[1]}:${m[2]}`))
+  ls.forEach((l, i) => {
+    if (/FATAL EXCEPTION/.test(l) && ls.slice(i, i + 3).some((x) => x.includes(`Process: ${pkg}`))) out.add(`FATAL EXCEPTION in ${pkg}: ${ls.slice(i + 1, i + 6).join(' ').replace(/\s+/g, ' ').slice(0, 200)}`)
+    if (new RegExp(`ANR in ${pkg.replace(/\./g, '\\.')}\\b`).test(l)) out.add(l.replace(/^.*?(ANR in)/, '$1').trim().slice(0, 160))
+    const m = l.match(/(Unhandled Exception:.*|EXCEPTION CAUGHT BY [A-Z ]+)/)
+    if (m) { // uncaught: any frame in lib/ads or in a file with an ad placement; caught by the framework: only lib/ads
+      const mine = frames(i).filter((f) => f.startsWith('lib/ads/') || (/Unhandled/.test(m[1]) && adFiles.includes(f.replace(/:\d+$/, ''))))
+      if (mine.length) out.add(`${m[1].trim().slice(0, 100)} at ${mine[0]}`)
+    }
+  })
+  return [...out]
+}
+export function monkeyProblems(text, wanted) {
+  const bad = text.split('\n').filter((l) => /^\/\/ (CRASH|NOT RESPONDING):/.test(l)).map((l) => l.trim())
+  const injected = Number((text.match(/Events injected: (\d+)/) || [])[1] || 0)
+  if (!/Monkey finished/.test(text)) bad.push(`monkey did not finish (${/aborted/i.test(text) ? 'aborted' : 'no end line'}): ${injected} of ${wanted} events`)
+  return { bad, injected }
+}
+function health(root, serial, pid0) {
+  const a = appOf(root), bad = [], pkg = a.appId, adFiles = [...new Set(placements(root, { all: true }).map((p) => p.id.replace(/:\d+$/, '')))]
+  const crash = adbOut(serial, 'logcat', '-b', 'crash', '-d', '-v', 'brief').trim()
+  if (crash) bad.push(`crash buffer: ${crash.split('\n').slice(0, 4).join(' | ').slice(0, 300)}`)
+  // pidof is empty for a moment while a process is forked and renamed: gone only when it stays empty over 3 reads
+  let pid = ''
+  for (let i = 0; i < 3 && !pid; i++) { pid = adbOut(serial, 'shell', 'pidof', pkg).trim(); if (!pid && i < 2) sleep(1) }
+  if (!pid) bad.push('the app process is gone')
+  else if (pid0 && pid !== pid0) bad.push(`the app process restarted (pid ${pid0} → ${pid}): it crashed or was killed — relaunch only with \`launch … --keep-data\``)
+  bad.push(...logProblems(adbOut(serial, 'logcat', '-d', '-v', 'brief'), pkg, a.name, adFiles))
+  return bad
+}
+const sleep = (sec) => spawnSync('sleep', [String(sec)])
+// install <apk>, start it, and watch it `settle` s: no crash, same process (`--keep-data`: the app's data is kept)
+export function launch(root, serial, apk, { keepData = false, settle = 30, wait = 150 } = {}) {
+  const a = appOf(root), pkg = a.appId, kind = /release/i.test(path.basename(apk)) ? 'release' : 'debug' // the file name only: a project path may hold "release"
+  if (!fs.existsSync(apk)) return { ok: false, text: `FAIL launch: no such file ${apk}` }
+  const inst = adbOut(serial, 'install', '-r', apk)
+  if (!/Success/.test(inst)) return { ok: false, text: `FAIL launch: install failed: ${inst.trim().slice(0, 200)}` }
+  if (!keepData) adbOut(serial, 'shell', 'pm', 'clear', pkg)
+  adbOut(serial, 'logcat', '-b', 'all', '-c')
+  const comp = adbOut(serial, 'shell', 'cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', pkg).trim().split('\n').at(-1)
+  adbOut(serial, 'shell', 'am', 'start', '-n', comp)
+  let pid = '', up = 0, bad = []
+  for (const t0 = Date.now(); Date.now() - t0 < wait * 1000;) {
+    const now = adbOut(serial, 'shell', 'pidof', pkg).trim()
+    if (now) { pid ||= now; up ||= Date.now(); if (Date.now() - up >= 4000 || Date.now() - up >= settle * 1000) { bad = health(root, serial, pid); if (bad.length || Date.now() - up >= settle * 1000) break } }
+    sleep(3)
+  }
+  if (!pid) bad = [`the app never started within ${wait} s`]
+  const ok = !bad.length, all = readSeen(root)
+  all._cursor = deviceNow(serial); all._run = { pid, kind, at: new Date().toISOString() }; all._launch = { ...all._launch, [kind]: { ok, apk: path.basename(apk), pid, evidence: bad, libHash: libHash(root), checker: CHECKER, at: new Date().toISOString() } }
+  writeSeen(root, all)
+  return { ok, text: [`${ok ? 'PASS' : 'FAIL'} launch ${kind}: ${path.basename(apk)} started (pid ${pid || '-'}) and ran ${settle} s${keepData ? ' on the kept data' : ' on cleared data'}`, ...bad.map((b) => `  ${b}`)].join('\n') }
+}
+// monkey: random touches, scrolls, Back and Home in the app for <events> events (seed 1), the ad screens and the resume ad included
+export function stress(root, serial, events = 600) {
+  const a = appOf(root), all = readSeen(root), pid0 = all._run?.pid
+  if (!pid0) return { ok: false, text: 'FAIL stress: no launch recorded — `ads-install.mjs launch` a debug build first' }
+  const r = spawnSync(ADB_BIN(), ['-s', serial, 'shell', 'monkey', '-p', a.appId, '-s', '1', '--throttle', '700', '--pct-syskeys', '0', '--pct-appswitch', '5', '-v', String(events)], { encoding: 'utf8', maxBuffer: 256 << 20, timeout: (events * 2 + 180) * 1000 })
+  const out = `${r.stdout || ''}\n${r.stderr || ''}`, { bad, injected } = monkeyProblems(out, events)
+  fs.mkdirSync(path.join(root, '.dart_tool'), { recursive: true }); fs.writeFileSync(path.join(root, '.dart_tool', 'ads_stress.log'), out.split('\n').filter((l) => /^(:Sending|:Switch|\/\/|Events|\*\*)/.test(l)).slice(-150).join('\n') + '\n') // the last 150 events, for diagnosis
+  bad.push(...health(root, serial, pid0))
+  const ok = !bad.length && injected >= events * 0.9
+  if (!bad.length && !ok) bad.push(`only ${injected} of ${events} events were injected`)
+  all._stress = { ok, events, injected, kind: all._run?.kind, evidence: bad, libHash: libHash(root), checker: CHECKER, at: new Date().toISOString() }; writeSeen(root, all)
+  return { ok, text: [`${ok ? 'PASS' : 'FAIL'} stress: ${injected} of ${events} random events (monkey, seed 1) on ${a.appId}`, ...bad.map((b) => `  ${b}`)].join('\n') }
+}
+
+// ---- an ad is proven on ITS screen, by ITS own show: ties between a placement and what the device shows ----
+// native / banner: the UI text of the placement's own file (its string literals that look like UI text) is on the device screen.
+// full-screen: the line the ad's own code logs when it is shown appeared after the last PASS (so a splash ad cannot pass
+// for the tap's interstitial). The line must still be in lib/ads: if the ads code changed, the check says so instead of passing.
+const MARKS = {
+  'full-screen: splash interstitial': [{ src: 'onAdImpression loadInterSplash', is: (l) => l.includes('onAdImpression loadInterSplash') }],
+  'full-screen: interstitial on tap': [{ src: 'onAdShowedFullScreenContent common showInter', is: (l) => l.includes('onAdShowedFullScreenContent common showInter') }],
+  'full-screen: rewarded': [{ src: 'onAdShowedFullScreenContent Reward Ad', is: (l) => l.includes('onAdShowedFullScreenContent Reward Ad') }],
+  'full-screen: intro app open': [{ src: 'onAdShowedFullScreenContent-==-', is: (l) => l.includes('onAdShowedFullScreenContent-==-') }],
+  'full-screen: app open on resume': [{ src: 'AppState', is: (l) => l.includes('AppState.foreground') }, { src: 'onAdShowedFullScreenContent', is: (l) => /AppOpenAd.* onAdShowedFullScreenContent(?!-)/.test(l) }],
+}
+export function uiLiterals(code) { // the strings of a Dart file that are text a user reads: words with a space, or a capitalised word; no keys, paths or ids
+  const out = new Set()
+  const shown = blank(code).replace(/\b(?:showLog|print|debugPrint|log|FirebaseEventService\.logEvent)\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*;/g, '') // what is logged is not on the screen
+  for (const m of shown.matchAll(/'([^'\\\n$]{3,40})'|"([^"\\\n$]{3,40})"/g)) {
+    const t = (m[1] ?? m[2]).trim()
+    if (/[A-Za-z]{3}/.test(t) && !/[/_.:@]/.test(t) && (/\s/.test(t) || /^[A-Z]/.test(t))) out.add(t)
+  }
+  return [...out]
+}
+export function markerHit(lines, items, cursor) { // the items' lines, in order, all newer than `cursor` ("MM-DD HH:MM:SS.mmm")
+  let i = 0
+  for (const l of lines) { const t = l.slice(0, 18); if (cursor && t <= cursor) continue; if (i < items.length && items[i].is(l)) i++ }
+  return i === items.length
+}
+function screenStrings(serial) {
+  let xml = ''
+  for (let i = 0; i < 5 && !/<hierarchy/.test(xml); i++) { adbOut(serial, 'shell', 'uiautomator', 'dump', '/sdcard/ads_seen_ui.xml'); xml = adbOut(serial, 'shell', 'cat', '/sdcard/ads_seen_ui.xml'); if (!/<hierarchy/.test(xml)) sleep(1) }
+  return [...xml.matchAll(/(?:content-desc|text)="([^"]+)"/g)].map((m) => m[1].replace(/&#10;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/\s+/g, ' ').trim())
+}
+const deviceNow = (serial) => adbOut(serial, 'shell', "date '+%m-%d %H:%M:%S'").trim() + '.999' // quoted: adb shell splits its words again on the device; the whole second: a line in the cursor's second is not newer
+
 // The screen as the app's window has it now: `dumpsys activity top` — every live view of the resumed activity with its
 // visibility (V / I / G) and position, and the status / navigation bar frames. (uiautomator's tree was not used: on the
 // emulator it still listed the intro's native on Home, 2026-10-29.)
@@ -675,9 +799,17 @@ export function seen(root, serial, id) {
   const over = (b, skip = /^$/) => s.wins.filter((w) => !skip.test(w.title) && w.b[0] < b[2] && w.b[2] > b[0] && w.b[1] < b[3] && w.b[3] > b[1])
   const covered = (b, skip) => over(b, skip).map((w) => ` — covered by the window "${w.title}" ${fmt(w.b)}${/^PopupWindow/.test(w.title) ? ' (an expanded collapsible banner: collapse it)' : ''}`).join('')
   let ok
+  const all0 = readSeen(root)
   if (place.kind.startsWith('full-screen')) {
     ok = /(^|\/)com\.google\.android\.gms\.ads\.AdActivity$/.test(s.top)
     ev.push(`resumed activity: ${s.top || '?'}`)
+    const items = MARKS[place.kind], adsSrc = walk(path.join(root, 'lib/ads')).map((f) => read(path.join(root, 'lib/ads', f))).join('\n')
+    if (!items) { ok = false; ev.push(`no log line known for "${place.kind}"`) }
+    else if (!items.every((m) => adsSrc.includes(m.src))) { ok = false; ev.push(`the line that shows "${place.kind}" (${items.map((m) => m.src).join(' … ')}) is not in lib/ads any more: the ads code changed, MARKS needs the new line`) }
+    else {
+      const lines = adbOut(serial, 'logcat', '-d', '-v', 'time').split('\n'), hit = markerHit(lines, items, all0._cursor)
+      ev.push(`${hit ? 'shown by' : 'NOT shown by'} this placement's own ad code: the log has ${items.map((m) => `"${m.src}"`).join(' then ')}${all0._cursor ? ` after ${all0._cursor}` : ''}${hit ? '' : ' — another ad is on screen, or this one has not been shown since the last PASS'}`); ok = ok && hit
+    }
   } else if (place.kind === 'native') {
     const hs = nativeHeights(root, s.W), ads = s.views.filter((v) => v.id === 'ad_view' && v.shown)
     ok = ads.some((v) => {
@@ -694,21 +826,36 @@ export function seen(root, serial, id) {
     ok = banners.some((v) => inArea(v.b) && v.b[3] - v.b[1] >= min && !covered(v.b, /^PopupWindow/))
     ev.push(...(banners.length ? banners.map((v) => `banner AdView ${fmt(v.b)}: ${v.b[3] - v.b[1]} px tall (≥ ${min})${inArea(v.b) ? '' : ` — not inside the app's visible area ${fmt(s.area)}`}${covered(v.b, /^PopupWindow/)}`) : ['no banner (AdView) shown on the screen']))
   }
+  if (!place.kind.startsWith('full-screen')) { // the screen of the placement's own file is the one showing
+    const file = place.id.replace(/:\d+$/, ''), others = new Set(walk(path.join(root, 'lib')).filter((f) => f.endsWith('.dart') && !f.startsWith('ads/') && `lib/${f}` !== file).flatMap((f) => uiLiterals(read(path.join(root, 'lib', f)))))
+    const lit = uiLiterals(read(path.join(root, file))).filter((l) => !others.has(l)), strs = screenStrings(serial), on = lit.filter((l) => strs.some((x) => x.includes(l)))
+    const need = 1, tied = lit.length > 0 && on.length >= need // text only this screen has (a pager shows one page at a time: one is enough)
+    ev.push(tied ? `on its screen: ${on.slice(0, 4).map((x) => `"${x}"`).join(', ')} are the text of ${place.id.replace(/:\d+$/, '')}` : `NOT on the screen of ${place.id.replace(/:\d+$/, '')}: ${lit.length ? `none of its ${lit.length} own texts is shown (${lit.slice(0, 4).map((x) => `"${x}"`).join(', ')} …)` : 'the file has no text of its own (every string is also in another screen) to tie the ad to its screen'} — this ad belongs to another screen`)
+    ok = ok && tied
+  }
   const dir = path.join(root, '.dart_tool', 'ads_seen'), shot = path.join(dir, `${id.replace(/[/:]/g, '_')}.png`)
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(shot, s.png())
-  const file = path.join(root, SEEN), all = fs.existsSync(file) ? JSON.parse(read(file)) : {}
-  all[id] = { kind: place.kind, ok, evidence: ev, screenshot: path.relative(root, shot), at: new Date().toISOString() }
-  fs.writeFileSync(file, JSON.stringify(all, null, 2))
+  const all = readSeen(root), sick = health(root, serial, all._run?.pid)
+  if (ok && place.kind.startsWith('full-screen')) all._cursor = deviceNow(serial) // the next full-screen ad needs its own, newer, show
+  if (!all._run) sick.unshift('no `launch` recorded: start the app with `ads-install.mjs launch` so its process and crashes are watched')
+  ev.push(...sick.map((b) => `CRASH CHECK: ${b}`)); ok = ok && !sick.length
+  all[id] = { kind: place.kind, ok, evidence: ev, screenshot: path.relative(root, shot), libHash: libHash(root), checker: CHECKER, at: new Date().toISOString() }
+  writeSeen(root, all)
   return { ok, text: [`${ok ? 'PASS' : 'FAIL'} ${id} (${place.kind})`, ...ev.map((e) => `  ${e}`), `  screenshot ${path.relative(root, shot)} — look at it: nothing of the app drawn over the ad`].join('\n') }
 }
 export function proof(root) {
-  const all = fs.existsSync(path.join(root, SEEN)) ? JSON.parse(read(path.join(root, SEEN))) : {}, ps = placements(root)
+  const all = readSeen(root), ps = placements(root), now = libHash(root)
+  const fresh = (r) => r && r.libHash === now && r.checker === CHECKER // a PASS is for the code it was made on, by the checker as it is now
   // a full-screen ad is the same ad wherever it is called: one PASS covers the same statement elsewhere in the same file
-  const twin = (p) => p.kind.startsWith('full-screen') && !all[p.id]?.ok ? ps.find((q) => q !== p && q.call === p.call && all[q.id]?.ok) : null
-  const rows = ps.map((p) => [p, all[p.id]?.ok || !twin(p) ? all[p.id] : { ok: true, screenshot: `the same call as ${twin(p).id}, seen` }]), bad = rows.filter(([, r]) => !r || !r.ok)
-  return { ok: !bad.length, text: [...rows.map(([p, r]) => `${r?.ok ? 'PASS' : r ? 'FAIL' : 'NOT SEEN'} ${p.id} (${p.kind})${r ? ` — ${r.screenshot}` : ''}`),
+  const twin = (p) => p.kind.startsWith('full-screen') && !(all[p.id]?.ok && fresh(all[p.id])) ? ps.find((q) => q !== p && q.call === p.call && all[q.id]?.ok && fresh(all[q.id])) : null
+  const rows = ps.map((p) => [p, (all[p.id]?.ok && fresh(all[p.id])) || !twin(p) ? all[p.id] : { ok: true, libHash: now, checker: CHECKER, screenshot: `the same call as ${twin(p).id}, seen` }]), bad = rows.filter(([, r]) => !r || !r.ok || !fresh(r))
+  const gates = [['launch debug', all._launch?.debug, 'the walk starts with `ads-install.mjs launch <debug apk>`'], ['launch release', all._launch?.release, '`ads-install.mjs launch <release apk>` of the final code'],
+    ['stress', all._stress, '`ads-install.mjs stress` on the release build just launched (`launch <release apk>`, then `stress`)']].map(([name, r, how]) => [name, r, how, r?.ok && fresh(r) && (name !== 'stress' || r.kind === 'release')])
+  return { ok: !bad.length && gates.every(([, , , good]) => good), text: [
+    ...rows.map(([p, r]) => `${r?.ok && fresh(r) ? 'PASS' : r ? (fresh(r) ? 'FAIL' : 'STALE (the code changed after it passed)') : 'NOT SEEN'} ${p.id} (${p.kind})${r ? ` — ${r.screenshot}` : ''}`),
     ...placements(root, { all: true }).filter((p) => p.dead).map((p) => `NEVER CALLED ${p.id} (${p.kind}) — ${p.dead}: no user can reach it, not required`),
-    `${ps.length - bad.length} of ${ps.length} placements seen on screen${bad.length ? ' — open each one that is not, with its ad on screen, and run `seen`' : ''}`].join('\n') }
+    ...gates.map(([name, r, how, good]) => `${good ? 'PASS' : r ? (fresh(r) ? 'FAIL' : 'STALE (the code changed after it passed)') : 'NOT RUN'} ${name}${good ? ` — ${r.apk || `${r.injected} events on the ${r.kind} build`}` : ` — ${how}`}${!good && r?.evidence?.length ? `: ${r.evidence[0]}` : ''}`),
+    `${ps.length - bad.length} of ${ps.length} placements seen on screen${bad.length ? ' — open each one that is not, with its ad on screen, and run `seen`' : ''}; ${gates.filter(([, , , good]) => good).length} of ${gates.length} crash gates passed`].join('\n') }
 }
 
 // ---- selftests ----
@@ -729,13 +876,21 @@ const snapshot = (root) => walk(root).filter((f) => !f.startsWith('.git/')).map(
 
 function selftest() {
   const out = []
-  const haveRefs = fs.existsSync(PPT) && fs.existsSync(PRE_REPO)
-  if (haveRefs) {
+  const havePpt = fs.existsSync(PPT), havePre = preReadable()
+  if (havePpt) {
     // the template is the team's two builds, nothing else; the change misses no file the builds differ in
-    for (const [f, t] of reference()) assert.ok(Buffer.from(t).equals(tplBuf(f) || Buffer.alloc(0)), `templates/flutter/ads/${f} is not what \`template\` builds from the team's builds (run it)`)
-    const diff = teamDiff(), known = new Set([...CHANGE, ...Object.keys(NOT_ADS)])
-    assert.deepEqual(diff.filter((f) => !known.has(f)), [], 'the team\'s builds differ in a file that is in neither CHANGE nor NOT_ADS')
-    assert.deepEqual([...known].filter((f) => !diff.includes(f)), [], 'CHANGE / NOT_ADS name a file the team\'s builds do not differ in')
+    if (havePre) {
+      for (const [f, t] of reference()) assert.ok(Buffer.from(t).equals(tplBuf(f) || Buffer.alloc(0)), `templates/flutter/ads/${f} is not what \`template\` builds from the team's builds (run it)`)
+      const diff = teamDiff(), known = new Set([...CHANGE, ...Object.keys(NOT_ADS)])
+      assert.deepEqual(diff.filter((f) => !known.has(f)), [], 'the team\'s builds differ in a file that is in neither CHANGE nor NOT_ADS')
+      assert.deepEqual([...known].filter((f) => !diff.includes(f)), [], 'CHANGE / NOT_ADS name a file the team\'s builds do not differ in')
+    } else { // the stored before/ and after/ against the team's build as it is now
+      for (const f of CHANGE) {
+        assert.ok(tplBuf(`after/${f}`)?.equals(withFixes(f, pptRead(f))), `templates/flutter/ads/after/${f} is not the team's file (+ FIXES): the team's build changed — rebuild with ADS_PRE`)
+        if (!ADS.includes(f) && !f.includes('/layout/') && !f.includes('/font/') && !f.includes('-v35/')) assert.ok(tplBuf(`before/${f}`), `templates/flutter/ads/before/${f} missing`)
+      }
+      out.push(`pre-ads commit ${PRE} not on this Mac: the stored before/ is used (a rebuild of the template needs ADS_PRE)`)
+    }
     // the fallback lines are the team's own
     const man = lf(pptRead(MANIFEST).toString()), gr = lf(pptRead('android/app/build.gradle').toString()), st = lf(pptRead('android/settings.gradle').toString())
     for (const [, b] of appBlocks(KT_PKG)) assert.ok(man.includes(b.trimEnd()), `manifest block not in the team's: ${b.split('\n')[1]}`)
@@ -746,7 +901,11 @@ function selftest() {
 
     // the AI PPT app before its ads → exactly the team's build
     const ppt = tmp('ads-ppt-'), at = (f) => path.join(ppt, f)
-    for (const f of preFiles()) put(at(f), preRead(f))
+    if (havePre) for (const f of preFiles()) put(at(f), preRead(f))
+    else { // the pre-ads app = the team's build, but every changed file as it was (or absent, when the change added it)
+      for (const f of walk(PPT).filter((x) => !BUILD_OUTPUT.test(x) && !NOT_ADS[x] && !CHANGE.includes(x))) put(at(f), pptRead(f))
+      for (const f of CHANGE) { const b = tplBuf(`before/${f}`); if (b) put(at(f), b) }
+    }
     const g = gitIn(ppt); g('init', '-q'); g('add', '-A'); g('commit', '-q', '-m', 'base'); const base = g('rev-parse', 'HEAD').trim()
     const r = install(ppt)
     for (const f of CHANGE) assert.ok(fs.readFileSync(at(f)).equals(withFixes(f, pptRead(f))), `${f}: not the team's file (with FIXES) after install`)
@@ -759,7 +918,7 @@ function selftest() {
     const snap = snapshot(ppt); install(ppt); assert.deepEqual(snapshot(ppt), snap, 'a second run changes nothing')
     fs.rmSync(ppt, { recursive: true, force: true })
     out.push(`the AI PPT app before its ads → the team's build + ${new Set(FIXES.map((x) => x.id)).size} fixes, every changed file byte for byte; T1 T2 T3 R3 R4 N1 pass`)
-  } else out.push(`template and PPT checks skipped: ${PPT} or ${PRE_REPO} not on this Mac`)
+  } else out.push(`template and PPT checks skipped: ${PPT} not on this Mac`)
 
   // merge3: the team's change goes into an app file that differs elsewhere; a conflict is null
   assert.equal(merge3('a\nmine\nb\nc\n', 'a\nb\nc\n', 'a\nb\nteam\nc\n'), 'a\nmine\nb\nteam\nc\n')
@@ -818,6 +977,25 @@ function selftest() {
   fs.rmSync(sk, { recursive: true, force: true })
   out.push('changes ok')
 
+  // crash detection: the lines a device gave for the F2 null show, a native crash, an ANR, and a monkey run
+  const dev = "I/flutter ( 6364): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Null check operator used on a null value\nI/flutter ( 6364): #0      AdsLoadUtil.showInterCommon (package:ai_ppt_generater/ads/ads_load_util.dart:227)\nI/flutter ( 6364): #1      onTapInter.<anonymous closure>.<anonymous closure> (package:ai_ppt_generater/service/app_constant.dart:89)\n"
+  assert.deepEqual(logProblems(dev, 'com.example.pptmaker', 'ai_ppt_generater', []), ['Unhandled Exception: Null check operator used on a null value at lib/ads/ads_load_util.dart:227'])
+  assert.deepEqual(logProblems("E/AndroidRuntime( 1): FATAL EXCEPTION: main\nE/AndroidRuntime( 1): Process: com.example.pptmaker, PID: 1\nE/AndroidRuntime( 1): java.lang.IllegalStateException: boom\n", 'com.example.pptmaker', 'x', []).length, 1)
+  assert.deepEqual(logProblems("E/AndroidRuntime( 1): FATAL EXCEPTION: main\nE/AndroidRuntime( 1): Process: other.app, PID: 1\n", 'com.example.pptmaker', 'x', []), [], 'another app\'s crash is not this app\'s')
+  assert.equal(logProblems('E/ActivityManager( 1): ANR in com.example.pptmaker (com.example.pptmaker/.MainActivity)', 'com.example.pptmaker', 'x', []).length, 1)
+  assert.deepEqual(logProblems("I/flutter (1): Unhandled Exception: x\nI/flutter (1): #0 f (package:x/screens/home_screen.dart:9)\n", 'p', 'x', []), [], 'an exception in a screen with no ad is the app\'s own')
+  assert.equal(logProblems("I/flutter (1): Unhandled Exception: x\nI/flutter (1): #0 f (package:x/screens/home_screen.dart:9)\n", 'p', 'x', ['lib/screens/home_screen.dart']).length, 1, 'in a screen with an ad: reported')
+  assert.deepEqual(logProblems("I/flutter (1): ══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY ╞═══\nI/flutter (1): The relevant error-causing widget was: Column lib/screens/home_screen.dart:215\n", 'p', 'x', ['lib/screens/home_screen.dart']), [], 'a caught overflow counts only in lib/ads')
+  assert.deepEqual(uiLiterals("final k = 'nativeHome';\nText('Use Template'); // 'Hidden'\nappText(title: \"Templates\", family: 'poppins_bold');\nImage.asset('assets/a/b.png'); var u = 'https://x.y'; log('$x here');"), ['Use Template', 'Templates'])
+  assert.deepEqual(uiLiterals("showLog('Native home loaded on intro');\nprint(\"Tried to show ad\");\nText('Create with AI');"), ['Create with AI'], 'what is logged is not on the screen')
+  const L = ['10-30 05:00:01.000 I/flutter ( 1): onAdImpression loadInterSplash', "10-30 05:00:09.100 I/flutter ( 1): AppState.foreground", "10-30 05:00:09.500 I/flutter ( 1): Instance of 'AppOpenAd' onAdShowedFullScreenContent"]
+  assert.equal(markerHit(L, MARKS['full-screen: splash interstitial'], ''), true); assert.equal(markerHit(L, MARKS['full-screen: splash interstitial'], '10-30 05:00:02.000'), false, 'an older show is not this one')
+  assert.equal(markerHit(L, MARKS['full-screen: app open on resume'], '10-30 05:00:02.000'), true); assert.equal(markerHit(L, MARKS['full-screen: intro app open'], ''), false, 'the resume ad is not the intro\'s')
+  assert.equal(markerHit([L[2], L[1]], MARKS['full-screen: app open on resume'], ''), false, 'foreground comes first')
+  assert.deepEqual(monkeyProblems('Events injected: 600\n// Monkey finished\n', 600), { bad: [], injected: 600 })
+  assert.equal(monkeyProblems('Events injected: 41\n// CRASH: com.x (pid 9)\n** Monkey aborted due to error.\n', 600).bad.length, 2)
+  out.push('crash detection ok')
+
   // placements / proof: every ad site, one not reachable (a function nothing calls) left out, the same full-screen call
   // elsewhere in the same file covered by one PASS, nothing PASSes without its own record
   const pl = tmp('ads-places-'), wp = (f, t) => put(path.join(pl, f), t)
@@ -826,10 +1004,15 @@ function selftest() {
   assert.deepEqual(placements(pl).map((x) => `${x.id} ${x.kind}`), ['lib/s.dart:2 native', 'lib/s.dart:3 full-screen: intro app open', 'lib/s.dart:4 full-screen: intro app open'])
   assert.equal(placements(pl, { all: true }).find((x) => x.id === 'lib/s.dart:8').dead, 'in neverUsed(), which nothing calls')
   assert.equal(proof(pl).ok, false)
-  wp(SEEN, JSON.stringify({ 'lib/s.dart:4': { ok: true, screenshot: 'x.png' } }))
+  wp(SEEN, JSON.stringify({ 'lib/s.dart:4': { ok: true, libHash: libHash(pl), checker: CHECKER, screenshot: 'x.png' } }))
   assert.match(proof(pl).text, /^NOT SEEN lib\/s\.dart:2 \(native\)\nPASS lib\/s\.dart:3 \(full-screen: intro app open\) — the same call as lib\/s\.dart:4, seen\n/)
-  wp(SEEN, JSON.stringify({ 'lib/s.dart:4': { ok: true, screenshot: 'x.png' }, 'lib/s.dart:2': { ok: true, screenshot: 'y.png' } }))
-  assert.equal(proof(pl).ok, true); assert.match(proof(pl).text, /NEVER CALLED lib\/s\.dart:8/)
+  const h0 = libHash(pl), gate = { ok: true, libHash: h0, checker: CHECKER, apk: 'app-release.apk' }
+  wp(SEEN, JSON.stringify({ 'lib/s.dart:4': { ok: true, libHash: h0, checker: CHECKER, screenshot: 'x.png' }, 'lib/s.dart:2': { ok: true, libHash: h0, checker: CHECKER, screenshot: 'y.png' } }))
+  assert.equal(proof(pl).ok, false); assert.match(proof(pl).text, /NOT RUN launch debug — /, 'a run without launch / stress is not proven')
+  wp(SEEN, JSON.stringify({ _launch: { debug: gate, release: gate }, _stress: { ok: true, libHash: h0, checker: CHECKER, kind: 'release', injected: 600 }, 'lib/s.dart:4': { ok: true, libHash: h0, checker: CHECKER, screenshot: 'x.png' }, 'lib/s.dart:2': { ok: true, libHash: h0, checker: CHECKER, screenshot: 'y.png' } }))
+  assert.equal(proof(pl).ok, true); assert.match(proof(pl).text, /NEVER CALLED lib\/s\.dart:8/); assert.match(proof(pl).text, /3 of 3 crash gates passed/)
+  wp('lib/s.dart', read(path.join(pl, 'lib/s.dart')) + '// edited\n')
+  assert.equal(proof(pl).ok, false); assert.match(proof(pl).text, /STALE \(the code changed after it passed\) lib\/s\.dart:2/); assert.match(proof(pl).text, /STALE .* launch release/)
   fs.rmSync(pl, { recursive: true, force: true })
   out.push('placements / proof ok')
 
@@ -855,6 +1038,8 @@ else if (argv[0] === 'selftest') console.log(selftest())
 else if (argv[0] === 'template' && argv.length === 1) console.log(writeTemplate())
 else if (argv[0] === 'placements' && argv.length === 2) console.log(placements(path.resolve(argv[1]), { all: true }).map((p) => `${p.id} (${p.kind})${p.dead ? ` — NEVER CALLED: ${p.dead}` : ''}`).join('\n'))
 else if (argv[0] === 'seen' && argv.length === 4) { const { ok, text } = seen(path.resolve(argv[1]), argv[2], argv[3]); console.log(text); if (!ok) process.exit(1) }
+else if (argv[0] === 'launch' && (argv.length === 4 || argv.length === 5)) { const { ok, text } = launch(path.resolve(argv[1]), argv[2], path.resolve(argv[3]), { keepData: argv.includes('--keep-data') }); console.log(text); if (!ok) process.exit(1) }
+else if (argv[0] === 'stress' && (argv.length === 3 || argv.length === 4)) { const { ok, text } = stress(path.resolve(argv[1]), argv[2], Number(argv[3]) || 600); console.log(text); if (!ok) process.exit(1) }
 else if (argv[0] === 'proof' && argv.length === 2) { const { ok, text } = proof(path.resolve(argv[1])); console.log(text); if (!ok) process.exit(1) }
 else if (argv[0] === 'reset' && argv.length === 2) { const { ok, text } = reset(path.resolve(argv[1])); console.log(text); if (!ok) process.exit(1) }
 else if (argv[0] === 'verify' && argv.length === 3) { const { ok, text } = verify(path.resolve(argv[1]), argv[2], { slotEdits, noScreen }); console.log(text); if (!ok) process.exit(1) }
@@ -869,4 +1054,4 @@ else if (argv[0] === 'changes' && (argv.length === 3 || argv.length === 4)) {
   console.log(r.done.join('\n'))
   if (r.todo.length) { console.error(`\nNOT DONE — do these (skills/flutter-ads sections 2–3), then run again:\n- ${r.todo.join('\n- ')}`); process.exit(1) }
   console.log('\nads installed. Next: flutter pub get; then skills/flutter-ads section 2 for anything the team\'s change has that is not in yet.')
-} else { console.error('usage: ads-install.mjs <project> | changes <project> <base commit> [<out file>] [--slot-edits f:n,…] [--no-screen f,…] | verify <project> <base commit> [--slot-edits …] [--no-screen …] | placements <project> | seen <project> <adb serial> <placement> | proof <project> | reset <project> | template | selftest'); process.exit(2) }
+} else { console.error('usage: ads-install.mjs <project> | changes <project> <base commit> [<out file>] [--slot-edits f:n,…] [--no-screen f,…] | verify <project> <base commit> [--slot-edits …] [--no-screen …] | placements <project> | launch <project> <serial> <apk> [--keep-data] | stress <project> <serial> [events] | seen <project> <adb serial> <placement> | proof <project> | reset <project> | template | selftest'); process.exit(2) }

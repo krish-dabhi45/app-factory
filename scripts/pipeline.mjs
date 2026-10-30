@@ -573,8 +573,8 @@ function deps(root) {
 
 // Every colour written in lib/ must come from the imported design (design/colors.json, written by the design import).
 // Catches Color(0xAARRGGBB), Color.fromARGB, Color.fromRGBO and Material's named Colors.* (except transparent).
-// lib/ads/ is the installed ads template, IPTV_two's ads code (flutter-ads skill section 7): its loader and toast colours
-// are IPTV's, native-ad colours come from Remote Config — not checked.
+// lib/ads/ is the team's ads code as installed (skills/flutter-ads): its loader and toast colours
+// are the team's, native-ad colours come from Remote Config — not checked.
 function colors(root) {
   const pal = path.join(root, 'design', 'colors.json')
   if (!fs.existsSync(pal)) return 'no design/colors.json (no imported design) — nothing to check'

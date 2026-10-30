@@ -5,12 +5,14 @@
 // Fix in code (the run fixes these):
 //   C1 every package lib/ imports is declared under dependencies: in pubspec.yaml
 //   C2 no Android/iOS permission without a package in pubspec.yaml that uses it
-//   C3 restorePurchases() only inside lib/premium_core/ (PremiumStore.restore(), called from a user's tap)
+//   C3 restorePurchases() only inside lib/premium_core/ (PremiumStore.restore(), called from a user's tap); in lib/ads/ (the
+//      team's ads code, its fetchPurchaseN on every launch) it is owner item O7, not changed
 //   C4 an app with a paywall (loadPlans() called) also has a restore() call and the words Terms and Privacy on screen
 //      (anywhere in lib/: in an MVVM app the view model loads and restores, the view shows the links)
 // Owner before store release (need the owner's accounts; listed, never fail the run):
 //   O1 store IDs still com.example · O2 release signed with the debug key · O3 Google's sample AdMob App ID
 //   O4 no Firebase config file (Remote Config, Analytics, Crashlytics run on the defaults) · O5 cleartext HTTP allowed
+//   O6 Google's demo ad units in config.json · O7 restorePurchases() on every launch in lib/ads/ (the team's)
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -58,8 +60,11 @@ export function check(root) {
     if (found.length && !pkgs.some((p) => deps.has(p))) fix.push(`C2 ${name} permission in ${found.join(' and ')}, but no package that uses it (${pkgs.join(', ')}): remove it — stores reject unused permissions`)
   }
 
-  const outside = dart.filter(([f]) => !f.startsWith('lib/premium_core/'))
+  // lib/ads/ is the team's ads code (skills/flutter-ads): its fetchPurchaseN restores on every launch, as the team's app does
+  // does — listed for the owner, not changed by the run
+  const outside = dart.filter(([f]) => !f.startsWith('lib/premium_core/') && !f.startsWith('lib/ads/'))
   for (const w of where(/\brestorePurchases\s*\(/, outside)) fix.push(`C3 ${w} calls restorePurchases(): use PremiumStore.instance.restore() from the Restore button only`)
+  for (const w of where(/\brestorePurchases\s*\(/, dart.filter(([f]) => f.startsWith('lib/ads/')))) owner.push(`O7 ${w} restores purchases on every launch (the team's fetchPurchaseN, lib/ads as installed): App Review may ask for restore to happen only from a Restore button`)
 
   const paywall = where(/\.loadPlans\s*\(/, outside)
   if (paywall.length) {
@@ -82,11 +87,12 @@ export function check(root) {
     if (missing.length && !fs.existsSync(path.join(root, 'lib/firebase_options.dart'))) owner.push(`O4 no ${missing.join(' or ')}: Remote Config, Analytics and Crashlytics run on the defaults there — add the files from the Firebase console`)
   }
   const clear = [['AndroidManifest.xml', /usesCleartextTraffic="true"/.test(manifest)], ['Info.plist', /NSAllowsArbitraryLoads<\/key>\s*<true\/>/.test(plist)]].filter(([, on]) => on).map(([n]) => n)
-  // remote_config.json = the value to publish as the Remote Config parameter (the app does not bundle it): a release build
-  // serves the ids Remote Config gives it (IPTV's lib/ads/, the ads template), and Google's demo ones show test ads
-  let defaults = {}; try { defaults = JSON.parse(text(root, 'remote_config.json') || '{}') } catch {}
+  // config.json (the installer's; remote_config.json from app-factory 0.41–0.43) = the value to publish as the Remote Config
+  // parameter (not bundled): a release build serves the ids Remote Config gives it, and Google's demo ones show test ads
+  const cfgName = ['config.json', 'remote_config.json'].find((f) => text(root, f)) || 'config.json'
+  let defaults = {}; try { defaults = JSON.parse(text(root, cfgName) || '{}') } catch {}
   const demo = Object.entries(defaults).filter(([, v]) => String(v).startsWith(SAMPLE_ADMOB.slice(0, -1) + '/')).map(([k]) => k)
-  if (demo.length) owner.push(`O6 Google's demo ad units in remote_config.json (${demo.join(', ')}): published as the Remote Config parameter, a release build shows Google test ads from them, which earn nothing — put the app's own ad unit ids there and publish it`)
+  if (demo.length) owner.push(`O6 Google's demo ad units in ${cfgName} (${demo.join(', ')}): published as the Remote Config parameter, a release build shows Google test ads from them, which earn nothing — put the app's own ad unit ids there and publish it`)
   if (clear.length) owner.push(`O5 cleartext HTTP allowed in ${clear.join(' and ')}: keep only if the app must load http:// content, and say why in App Review notes`)
   return { fix, owner }
 }
@@ -115,12 +121,16 @@ function selftest() {
     assert.match(r.fix[1], /location permission in AndroidManifest\.xml and Info\.plist/)
     assert.match(r.fix[2], /lib\/main\.dart:6 calls restorePurchases/, 'the comment on line 4 and premium_core are not flagged')
     assert.match(r.fix[3], /paywall \(lib\/ui\/paywall\.dart:1\) but lib\/ has no a restore\(\) call, a "Terms of Use" text \(/, 'Privacy Policy is there')
-    w('remote_config.json', '{"interSplash": "ca-app-pub-3940256099942544/1033173712", "banner": "11", "nativeHome": "ca-app-pub-1234567890123456/111"}')
+    w('config.json', '{"interSplash": "ca-app-pub-3940256099942544/1033173712", "banner": "11", "nativeHome": "ca-app-pub-1234567890123456/111"}')
+    w('lib/ads/ads_splash_utils.dart', 'fetchPurchaseN() async {\n  final customerInfo1 = await Purchases.restorePurchases();\n}\n') // the team's
     r = check(root)
-    assert.deepEqual(r.owner.map((l) => l.slice(0, 2)), ['O1', 'O2', 'O3', 'O4', 'O6', 'O5'], report(r))
-    assert.match(r.owner[4], /demo ad units in remote_config\.json \(interSplash\)/, '"11" and an own id are not flagged')
-    assert.match(r.owner[0], /com\.example\.my_app.*com\.example\.myApp\)/)
-    assert.doesNotMatch(r.owner[0], /RunnerTests/)
+    assert.deepEqual(r.fix.map((l) => l.slice(0, 2)), ['C1', 'C2', 'C3', 'C4'], 'lib/ads/ is not a code fix')
+    assert.deepEqual(r.owner.map((l) => l.slice(0, 2)), ['O7', 'O1', 'O2', 'O3', 'O4', 'O6', 'O5'], report(r))
+    assert.match(r.owner[0], /O7 lib\/ads\/ads_splash_utils\.dart:2 restores purchases on every launch/)
+    assert.match(r.owner[5], /demo ad units in config\.json \(interSplash\)/, '"11" and an own id are not flagged')
+    fs.rmSync(path.join(root, 'lib/ads'), { recursive: true })
+    assert.match(r.owner[1], /com\.example\.my_app.*com\.example\.myApp\)/)
+    assert.doesNotMatch(r.owner[1], /RunnerTests/)
     // the same app made ready: every list empty
     w('pubspec.yaml', 'name: my_app\ndependencies:\n  flutter:\n    sdk: flutter\n  firebase_core: 5.0.0\n  purchases_flutter: 10.16.0\n  url_launcher: 6.3.0\n  geolocator: 14.0.1\n')
     w('android/app/build.gradle.kts', 'android {\n    defaultConfig {\n        applicationId = "com.acme.notes"\n    }\n    buildTypes {\n        release {\n            signingConfig = signingConfigs.getByName("release")\n        }\n    }\n}\n')
@@ -131,7 +141,7 @@ function selftest() {
     w('lib/ui/paywall.dart', "void init() => PremiumStore.instance.loadPlans();\nvoid r() => PremiumStore.instance.restore();\n")
     w('lib/ui/paywall_view.dart', "final links = [Text('Terms of Use'), Text('Privacy Policy')];\n")
     w('android/app/google-services.json', '{}'); w('ios/Runner/GoogleService-Info.plist', '<plist/>')
-    w('remote_config.json', '{"interSplash": "ca-app-pub-1234567890123456/222", "banner": "11"}')
+    w('config.json', '{"interSplash": "ca-app-pub-1234567890123456/222", "banner": "11"}')
     r = check(root)
     assert.deepEqual(r, { fix: [], owner: [] }, report(r))
     // a pubspec saved with CRLF line ends parses the same

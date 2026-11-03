@@ -107,13 +107,40 @@ Verified 2026-10-22: a renamed copy of this repo (so it wouldn't collide with th
 
 ## 4. Run it
 
-app-factory has three commands; everything else in it (the flutter-app, flutter-ads and app-qa rule books) is read by its agents and is not in the `/` menu:
+app-factory has four commands; everything else in it (the flutter-app, flutter-ads and app-qa rule books) is read by its agents and is not in the `/` menu:
 
 | Command | What it does |
 |---|---|
 | `/app-factory:build-app` | Builds the app from `PRD.md`: contract and questions first, then the build, tests, senior QA and the final audit. Ads + Remote Config are in every app unless the PRD says no ads. |
+| `/app-factory:app-dev-without-prd` | **App dev without PRD.** No PRD and no Figma: give it an existing app's link (and its APK in the folder, if you have it); it audits the app, writes `PRD.md` from what it saw with a new theme, then starts `/app-factory:build-app` on it. Section 4a. |
 | `/app-factory:stop` | Stops a running build-app run from the chat that started it, frees its locks and devices, keeps all work. |
 | `/app-factory:ads-implementation` | Adds ads + Remote Config to an app that is already built: explores the entire app, then places every ad by the pattern (section 9b). |
+
+### 4a. App dev without PRD — rebuild an existing app with a new theme
+
+For an app you want rebuilt with **all of its functionality** and a **different theme and colours**, when you have no PRD and no Figma file. In an empty project folder (the app's `.apk`, `.apks`, `.xapk` or `.apkm` may be in it):
+
+```
+/app-factory:app-dev-without-prd {"app":"https://play.google.com/store/apps/details?id=<package>","name":"<new app name>"}
+```
+
+The link may be a Google Play link, an App Store link or the app's website; `name` and `note` are optional (no `name` → a new name is chosen and marked ASSUMED). What it does, all visible in `/workflows` and `.pipeline/PROGRESS.md`:
+
+1. **Source** — resolves the link (an App Store link → the Android version is looked up by title and developer). The APK: the one in the folder; none → pulled from a connected phone that already has the app (`pm path` + `adb pull` — read only, nothing on the phone is launched or changed); none there either → no APK. It never downloads an APK from a mirror site. `*.apk` files are git-ignored.
+2. **Audit**, three agents at once:
+   - **store + web** → `source-app/store.md`: the Play and App Store listings (description, in-app purchases with prices, Data safety / App Privacy), the developer's help and policy pages, every listing screenshot in `source-app/store/`; every claimed capability gets an id (`F01`), every screenshot one (`P01`).
+   - **APK files** (only with an APK) → `source-app/static.md`, with the SDK's own tools (`aapt2`, `apkanalyzer`, `unzip`, `strings`): permissions, activities, deep links, share targets, the framework, every SDK and Dart package, the app's own screen files (Flutter: its `package:<app>/….dart` paths), UI texts and error messages, backend hosts, colours. Every dependency and own screen gets an id (`D01`). Keys and IDs are recorded as "present", never their values. jadx is used when it is installed (for formulas and validation); it is not installed by the plugin.
+   - **walk** (only with an APK) → `source-app/walk.md` + `source-app/screens/S<nn>-*.png`: the app installed on the plugin's **own emulator** (never your phone — it is someone else's build), every screen breadth-first by the element list, every control tapped once, every field tried empty / invalid / valid with the exact messages, every calculation run with 3 inputs, first launch, offline, restart persistence, dark mode, notifications; never buys, signs in, sends or posts. Every screen gets an id (`S01`). Uninstalled and the emulator stopped at the end.
+3. **Report** → `PRD.md` (14 fixed sections: App, Platforms, Screens, Navigation, Fields, Features, Data and backend, Monetisation, Permissions and notifications, Settings, Theme, Not copied, Coverage, Sources) and `source-app/theme.json` (the new palette). It must pass `node scripts/source-app.mjs check . [--apk]`, which fails on:
+   - a requirement line without its source — `[walk: S07]`, `[store: F03]`, `[static: D04]`, `[web: <url>]`, `[user]`, `ASSUMED` or `NOT OBSERVED`;
+   - a vague word (`etc`, `and more`, `various`, `similar to`, `as needed`, `appropriate`, `probably`, `maybe`, `TBD`, `…`);
+   - any S, F, D or P id seen in the source app that is not in `PRD.md` (nothing seen is dropped silently — a left-out one is in Coverage with its reason), a cited id or URL the evidence does not have, a file named that does not exist;
+   - a theme missing one of the ten roles, an on-colour below 4.5:1 (WCAG AA), or a primary or secondary within 60° of hue of the source's (measured from its screenshots with `source-app.mjs palette`).
+4. It then starts `/app-factory:build-app {"noFigma":true}` in the same chat: contract and questions from `PRD.md`, then the build, tests, senior QA and final audit as always. The `colors` gate holds the code to `source-app/theme.json`'s colours; the old-theme screenshots are evidence only, never a pixel reference.
+
+Not copied into the new app: the source's name, logo, icon, illustrations, marketing texts, keys, IDs and servers. A feature that needs a backend (sign-in, a cloud database, a paid API) goes through the contract's Missing keys step like any PRD: a free no-key service for now, a "not available" message, or your key.
+
+Without an APK there is no walk: screens come from the store screenshots and the listing, and every rule no source shows is `NOT OBSERVED` — an APK gives a much more exact rebuild.
 
 ### Figma design (optional)
 
@@ -187,7 +214,7 @@ To continue later, say "continue the app-factory run" in the same chat: `pipelin
 
 ## 6. After you change the plugin
 
-1. Check it: `node scripts/pipeline.mjs selftest`, `node scripts/firewall.mjs selftest`, `node scripts/run-report.mjs selftest`, `node scripts/assets.mjs selftest`, `node scripts/app-icon.mjs selftest`, `node scripts/screen-diff.mjs selftest`, `node scripts/design-components.mjs selftest`, and — after changing the workflow — `node scripts/simulate.mjs` (it compiles the workflow the way Claude Code does and runs every path with fake agents; it must print no FAIL). `node --check` is not a check here: it passes this file even with a syntax error in it.
+1. Check it: `node scripts/pipeline.mjs selftest`, `node scripts/firewall.mjs selftest`, `node scripts/run-report.mjs selftest`, `node scripts/assets.mjs selftest`, `node scripts/app-icon.mjs selftest`, `node scripts/screen-diff.mjs selftest`, `node scripts/design-components.mjs selftest`, `node scripts/source-app.mjs selftest`, and — after changing the workflow — `node scripts/simulate.mjs` (it compiles the workflow the way Claude Code does and runs every path with fake agents; it must print no FAIL). `node --check` is not a check here: it passes this file even with a syntax error in it.
 2. Raise `version` in `.claude-plugin/plugin.json`. An unchanged version number is skipped.
 3. Type `/install-app-factory` again in each project's window.
 4. Reload that window and start a new chat.

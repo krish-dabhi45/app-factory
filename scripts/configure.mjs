@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Points the build-app workflow at this machine: writes the default plugin folder, Flutter, Android SDK, Java and
-// Android system image into workflows/build-app.js (a workflow script cannot look them up itself). Run by install.sh.
+// Points the workflows at this machine: writes the default plugin folder, Flutter, Android SDK, Java and
+// Android system image into every workflows/*.js (a workflow script cannot look them up itself). Run by install.sh.
 //   node configure.mjs            — find them, write them, print what was found (a WARNING for each one missing)
 //   node configure.mjs selftest
 // Found from: the plugin's own folder; flutter on PATH; ANDROID_HOME / ANDROID_SDK_ROOT, else Android Studio's default
@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const WF = path.join(ROOT, 'workflows', 'build-app.js')
+const WFS = path.join(ROOT, 'workflows') // every workflow script: build-app.js, app-dev-without-prd.js
 const fwd = (p) => p.replace(/\\/g, '/') // Node and Git Bash both accept C:/… on Windows
 
 export function onPath(name, env = process.env, platform = process.platform) {
@@ -68,7 +68,10 @@ function selftest() {
 const direct = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 if (direct && process.argv[2] === 'selftest') console.log(selftest())
 else if (direct) {
-  const f = find(), before = fs.readFileSync(WF, 'utf8'), after = write(before, f)
-  if (after !== before) fs.writeFileSync(WF, after)
+  const f = find()
+  for (const wf of fs.readdirSync(WFS).filter((n) => n.endsWith('.js')).map((n) => path.join(WFS, n))) {
+    const before = fs.readFileSync(wf, 'utf8'), after = write(before, f)
+    if (after !== before) fs.writeFileSync(wf, after)
+  }
   console.log(`plugin  : ${f.root}\nflutter : ${f.flutter || 'WARNING: not found on PATH — install Flutter or pass {"flutter":"<path>"}'}\nandroid : ${f.androidSdk || 'WARNING: no Android SDK (ANDROID_HOME, ANDROID_SDK_ROOT or Android Studio\'s default folder) — Android builds and the emulator will fail'}\njava    : ${f.javaHome || 'WARNING: JAVA_HOME not set — avdmanager (the Android emulator setup) needs Java 17'}\nimage   : ${f.androidImage}\nios     : ${process.platform === 'darwin' ? 'macOS — iOS builds and simulators available when Xcode is installed' : 'not available on this system (iOS needs macOS with Xcode) — runs test on Android only'}`)
 }

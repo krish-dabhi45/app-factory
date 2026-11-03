@@ -61,7 +61,7 @@
 //   phone save|restore <serial> — a real Android phone's own settings (font scale, dark mode, Wi-Fi, mobile data,
 //                           rotation), saved before the run changes any and put back at `devices release` and `stop`
 //                         — one machine-wide lock on the shared test devices (simulators and emulators), so only one project's run uses them at a time
-//   colors [--root <dir>] — fails if lib/ uses a colour that is not in design/colors.json (the imported Figma palette)
+//   colors [--root <dir>] — fails if lib/ uses a colour that is not in design/colors.json (the imported Figma palette), else source-app/theme.json
 //   deps [--root <dir>]   — Flutter: every package in pubspec.yaml and the files that use it; fails if one is unused
 //   scope <baseRef>[..<branch>] <glob...> — fails if any file changed since baseRef (in the checkout, or on branch) is outside the globs
 //   stop <project> [--run <workflow run id>] [--sdk <android sdk>] — the user stopped the run in the middle: records it in the
@@ -571,14 +571,15 @@ function deps(root) {
   return report
 }
 
-// Every colour written in lib/ must come from the imported design (design/colors.json, written by the design import).
-// Catches Color(0xAARRGGBB), Color.fromARGB, Color.fromRGBO and Material's named Colors.* (except transparent).
+// Every colour written in lib/ must come from the imported design (design/colors.json, written by the design import),
+// or, for an app rebuilt from an audited one (/app-factory:app-dev-without-prd), its new theme (source-app/theme.json). Catches Color(0xAARRGGBB), Color.fromARGB, Color.fromRGBO and Material's named Colors.* (except transparent).
 // lib/ads/ is the team's ads code as installed (skills/flutter-ads): its loader and toast colours
 // are the team's, native-ad colours come from Remote Config — not checked.
 function colors(root) {
-  const pal = path.join(root, 'design', 'colors.json')
-  if (!fs.existsSync(pal)) return 'no design/colors.json (no imported design) — nothing to check'
-  const allowed = new Set(JSON.parse(fs.readFileSync(pal, 'utf8')).colors.map((c) => c.hex.toUpperCase().replace(/^#/, '').slice(-6)))
+  const pal = [path.join(root, 'design', 'colors.json'), path.join(root, 'source-app', 'theme.json')].find((f) => fs.existsSync(f))
+  if (!pal) return 'no design/colors.json (no imported design) and no source-app/theme.json — nothing to check'
+  const j = JSON.parse(fs.readFileSync(pal, 'utf8')), from = path.relative(root, pal)
+  const allowed = new Set([...j.colors, ...(j.dark || [])].map((c) => c.hex.toUpperCase().replace(/^#/, '').slice(-6)))
   const hex2 = (n) => Math.round(Number(n)).toString(16).padStart(2, '0').toUpperCase()
   const bad = []
   for (const f of walk(root).filter((f) => f.startsWith('lib/') && !f.startsWith('lib/ads/') && f.endsWith('.dart'))) {
@@ -590,8 +591,8 @@ function colors(root) {
       for (const m of line.matchAll(/\bColors\.(\w+)/g)) if (m[1] !== 'transparent') bad.push(`${at} Colors.${m[1]}`)
     })
   }
-  if (bad.length) throw new Error(`${bad.length} colour(s) in lib/ that are not in design/colors.json:\n${bad.join('\n')}\nUse the theme's colours (built from design/colors.json) instead.`)
-  return `all colours in lib/ come from design/colors.json (${allowed.size} design colours)`
+  if (bad.length) throw new Error(`${bad.length} colour(s) in lib/ that are not in ${from}:\n${bad.join('\n')}\nUse the theme's colours (built from ${from}) instead.`)
+  return `all colours in lib/ come from ${from} (${allowed.size} design colours)`
 }
 
 // The project folder holds only the app, its tests, CONTRACT.md and design/. Files that existed before the run's

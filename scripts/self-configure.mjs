@@ -24,10 +24,12 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 export function run(root = ROOT, home = os.homedir()) {
   const report = []
   try {
-    const wf = path.join(root, 'workflows', 'build-app.js')
-    const before = fs.readFileSync(wf, 'utf8'), after = write(before, find(process.env, process.platform, process.arch, home))
-    if (after !== before) { fs.writeFileSync(wf, after); report.push('configured workflows/build-app.js for this machine') }
-  } catch (e) { report.push(`could not configure workflows/build-app.js: ${e.message}`) }
+    const f = find(process.env, process.platform, process.arch, home), wfs = path.join(root, 'workflows')
+    for (const n of fs.readdirSync(wfs).filter((x) => x.endsWith('.js'))) {
+      const wf = path.join(wfs, n), before = fs.readFileSync(wf, 'utf8'), after = write(before, f)
+      if (after !== before) { fs.writeFileSync(wf, after); report.push(`configured workflows/${n} for this machine`) }
+    }
+  } catch (e) { report.push(`could not configure workflows: ${e.message}`) }
 
   try {
     const src = path.join(root, 'setup', 'install-app-factory', 'SKILL.md')

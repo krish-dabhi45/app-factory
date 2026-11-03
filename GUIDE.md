@@ -216,6 +216,7 @@ To continue later, say "continue the app-factory run" in the same chat: `pipelin
 
 1. Check it: `node scripts/pipeline.mjs selftest`, `node scripts/firewall.mjs selftest`, `node scripts/run-report.mjs selftest`, `node scripts/assets.mjs selftest`, `node scripts/app-icon.mjs selftest`, `node scripts/screen-diff.mjs selftest`, `node scripts/design-components.mjs selftest`, `node scripts/source-app.mjs selftest`, and — after changing the workflow — `node scripts/simulate.mjs` (it compiles the workflow the way Claude Code does and runs every path with fake agents; it must print no FAIL). `node --check` is not a check here: it passes this file even with a syntax error in it.
 2. Raise `version` in `.claude-plugin/plugin.json`. An unchanged version number is skipped.
+   Then add its entry at the top of `CHANGELOG.md`, in the 0.47.0 entry's format: version, date, commit; then Added, Changed, Checked (each command and its result), Not checked, and Not in this version. Name every file changed and what it now does, with exact names, numbers and messages. Write none of the words `source-app.mjs check` refuses (etc, various, similar to, as needed, probably, TBD, `…`). After committing, write the commit's short hash into the heading and commit that line too.
 3. Type `/install-app-factory` again in each project's window.
 4. Reload that window and start a new chat.
 

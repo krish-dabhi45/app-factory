@@ -5,6 +5,8 @@
 //                                                    source-app/static.md and walk.md must exist
 //   node source-app.mjs palette <png...>          — the 12 most used colours of screenshots (exact #RRGGBB, share of pixels):
 //                                                    the source app's palette, measured instead of guessed
+//   node source-app.mjs status <project>          — JSON of what an earlier run left: evidence ids per file (walk 0 = not
+//                                                    walked), PRD.md and its problem count, CONTRACT.md, pubspec.yaml, lib/ .dart files
 //   node source-app.mjs selftest
 // Evidence files (written by the audit agents): source-app/store.md (always), static.md and walk.md (with an APK).
 // Each seen item gets an id on its own line — "## S07 · <screen>" or "- F03 · <claim>" (S screen, F store/web feature,
@@ -106,6 +108,21 @@ export function check(root, { apk = false } = {}) {
   return bad
 }
 
+// What an earlier run already left in the folder, so a new run continues from it instead of starting over: the ids
+// each evidence file holds (0 = missing or failed — a walk.md with no screen), the PRD's state and the build's.
+// An app project's own root file: Flutter, XcodeGen, Gradle (native Android), npm (React Native, Capacitor, Cordova).
+const APP_FILES = ['pubspec.yaml', 'project.yml', 'settings.gradle', 'settings.gradle.kts', 'package.json']
+export function status(root) {
+  const f = (p) => path.join(root, p), has = (p) => fs.existsSync(f(p))
+  const ids = (p, k) => (has(p) ? fs.readFileSync(f(p), 'utf8').split('\n').filter((l) => (l.match(ID_LINE) || [])[1]?.startsWith(k)).length : 0)
+  const apk = has('source-app/static.md')
+  const dart = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? dart(path.join(d, e.name)) : e.name.endsWith('.dart') ? 1 : 0), 0) : 0)
+  return {
+    sourceApp: has('source-app'), store: ids('source-app/store.md', 'F'), static: ids('source-app/static.md', 'D'), walk: ids('source-app/walk.md', 'S'),
+    prd: has('PRD.md'), prdProblems: has('PRD.md') ? check(root, { apk }).length : null, contract: has('CONTRACT.md'), app: APP_FILES.some(has) || fs.readdirSync(root).some((e) => e.endsWith('.xcodeproj')), dartFiles: dart(f('lib')),
+  }
+}
+
 export function palette(files) {
   const n = new Map()
   let total = 0
@@ -144,6 +161,11 @@ function selftest() {
   const b3 = check(tmp, { apk: true })
   assert.ok(b3.some((x) => /too close/.test(x)), 'a primary of the same hue as the source is caught')
   assert.ok(b3.some((x) => /onSurface on surface/.test(x)), 'low contrast is caught')
+  w('source-app/theme.json', JSON.stringify(theme))
+  assert.deepEqual(status(tmp), { sourceApp: true, store: 1, static: 1, walk: 1, prd: true, prdProblems: 0, contract: false, app: false, dartFiles: 0 }, 'status: the evidence and a ready PRD are found')
+  w('source-app/walk.md', '# Walk\nNOT OBSERVED: INSTALL_FAILED_MISSING_SPLIT\n')
+  assert.equal(status(tmp).walk, 0, 'status: a walk with no screen counts as not done')
+  for (const f of ['settings.gradle.kts', 'Demo.xcodeproj']) { fs.mkdirSync(path.join(tmp, 'x'), { recursive: true }); fs.writeFileSync(path.join(tmp, 'x', f), ''); assert.equal(status(path.join(tmp, 'x')).app, true, `status: ${f} is an app project`); fs.rmSync(path.join(tmp, 'x'), { recursive: true }) }
   fs.rmSync(path.join(tmp, 'source-app', 'walk.md'))
   assert.ok(!check(tmp).some((x) => /walk\.md missing/.test(x)) && check(tmp, { apk: true }).some((x) => /walk\.md missing/.test(x)), 'walk.md is required only with an APK')
   assert.ok(distinct('#000000', '#C2185B') && !distinct('#FFFFFF', '#F5F5F5'), 'greys compare by RGB distance')
@@ -160,9 +182,10 @@ if (direct) {
   const [cmd, root, ...a] = process.argv.slice(2)
   if (cmd === 'selftest') console.log(selftest())
   else if (cmd === 'palette' && root) console.log(palette([root, ...a]).join('\n'))
+  else if (cmd === 'status' && root) console.log(JSON.stringify(status(path.resolve(root))))
   else if (cmd === 'check' && root) {
     const bad = check(path.resolve(root), { apk: a.includes('--apk') })
     if (bad.length) { console.error(`AUDIT NOT READY (${bad.length} problem(s)) — fix each and run check again:\n${bad.join('\n')}`); process.exit(1) }
     console.log('audit ready: PRD.md cites a source for every requirement, every seen screen, feature, dependency and screenshot is in it, and the new theme is distinct and readable')
-  } else { console.error('usage: source-app.mjs check <project> [--apk] | palette <png...> | selftest'); process.exit(2) }
+  } else { console.error('usage: source-app.mjs check <project> [--apk] | status <project> | palette <png...> | selftest'); process.exit(2) }
 }

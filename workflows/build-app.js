@@ -19,6 +19,7 @@ const int = { type: 'integer' }
 const bool = { type: 'boolean' }
 const strs = { type: 'array', items: str }
 const BUILD = obj(['buildOk', 'testsOk', 'testSummary', 'filesChanged'], { buildOk: bool, testsOk: bool, testSummary: str, appPath: str, filesChanged: strs })
+const EXISTING = obj(['existing', 'sharedLayer', 'done', 'failing', 'missing'], { existing: bool, sharedLayer: bool, analyzeErrors: int, done: strs, failing: strs, missing: strs, note: str })
 const DESIGN_IMPORT = obj(['status', 'prdScreens', 'screens', 'matchedScreens', 'flows', 'colors', 'assets', 'missing', 'figmaCalls', 'compression', 'note'], {
   status: { type: 'string', enum: ['imported', 'reused', 'none', 'failed'] },
   prdScreens: int,
@@ -378,10 +379,21 @@ const STATUS_LAST = `Your last command: \`${P} status\`; return its "blocking" a
 
 // ───────────────────────────── Build: interface → per group logic ∥ UI ∥ flow tests → integrator → gate ─────────────────────────────
 phase('Build')
-if (PAR_BUILD) {
+// Work already in the folder (an earlier run stopped half-way, or a resumed /app-factory:app-dev-without-prd): audited
+// first, so the build continues from it — the groups whose criteria already pass are not built again.
+const existing = STACK.own ? await agent(
+  `${WHERE}
+EXISTING WORK — the build continues from what is already in this folder; it is never started over. \`find lib -name '*.dart'\` and \`head -40 lib/main.dart\`: no .dart file in lib/, or lib/main.dart is its only one and is still flutter create's counter app (it contains _incrementCounter) → return existing=false, sharedLayer=false and empty lists, and do nothing else. Any other code counts, whoever wrote it (an earlier run of this plugin, another tool, the user).
+Otherwise audit it (read only — change no file): \`"${FLUTTER}" pub get\`, then \`"${FLUTTER}" analyze\` → analyzeErrors = its "error •" lines; then \`${UT} -r expanded --no-pub test/ > "$(mktemp)" 2>&1\` and grep that log for each test's result (unit and widget tests only — no device test here; no test/ folder → skip this, every criterion is missing). sharedLayer = true when the shared layer this plugin's build skill describes exists — lib/main.dart, a theme, the routes and lib/ui/core/app_keys.dart — and analyze reports no error; code in another structure is existing work with sharedLayer false. For EVERY criterion id in CONTRACT.md: done = a test named after it ("AC12 …") exists in test/ and every such test passed; failing = such a test exists and one failed; missing = no test named after it. Do not mark any feature passing (the final audit does). Return the lists and, in note, one line: the .dart file count, analyze errors and the test totals.`,
+  { label: 'existing work', phase: 'Build', schema: EXISTING, effort: 'low' },
+) : null
+const EX = Boolean(existing && existing.existing)
+const DONE = new Set(EX ? existing.done : [])
+if (EX) log(`existing work: ${existing.note || ''} — ${DONE.size} criteria already pass their tests, ${existing.failing.length} fail, ${existing.missing.length} have no test; the build continues from it${existing.sharedLayer ? ' (shared layer kept, no interface step)' : ''}`)
+if (PAR_BUILD && !(EX && existing.sharedLayer)) {
   await agent(
     `${WHERE}
-Interface step: per feature group, a logic builder, a UI builder and a flow-test writer will work at the same time after you, so they need a fixed meeting point — in Dart, not in a document. First run \`${P} brief build\`. ${STACK.skills.all}
+${EX ? 'This folder already holds app code (EXISTING WORK above, in another structure or incomplete): keep every file that exists — read it, reuse its models, services and screens, and add only the shared pieces below that are missing; never replace an existing file with a stub or placeholder. ' : ''}Interface step: per feature group, a logic builder, a UI builder and a flow-test writer will work at the same time after you, so they need a fixed meeting point — in Dart, not in a document. First run \`${P} brief build\`. ${STACK.skills.all}
 Project conventions, for reference:
 ${STACK.make}
 Write ONLY the shared layer now, for the whole app: create the project and its folder structure, the theme, the data models, storage, navigation/routes (every screen as a placeholder that compiles), and every logic function and repository method the screens will need (calculation, validation per field of the field table, limits, numbering) as a compiling stub with its final name, parameters and return type, body not implemented. Add lib/ui/core/app_keys.dart: one \`abstract final class AppKeys\` with a \`ValueKey\` constant for every interactive widget and every asset the contract and design name (build skill U6, T7) — the UI builders use these on the widgets and the flow-test writers find widgets by them. Add every package the app will need to pubspec.yaml now and fetch them — the builders may not change it. Add dart_test.yaml declaring the tags "ios" and "android" (flow tests that only apply to one platform). Copy the layout-test helper: \`mkdir -p test/ui && cp "${ROOT}/templates/flutter/test/ui/fits_screen.dart" test/ui/fits_screen.dart\` (the UI builders' layout tests import it; build skill T3). If CONTRACT.md section 9 (Ads) lists placements, install the team's ads + Remote Config implementation only this way: \`node "${ROOT}/scripts/ads-install.mjs" "$(pwd)"\`, then \`flutter pub get\` (it applies the team's own ads change — lib/ads/, the team's helpers the app lacks, config.json (the Remote Config value to publish under <pubspec name>_v1), the team's Android lines and the packages; if it prints NOT DONE, do exactly that and run it again), then wire every placement of section 9 as "${ADS}" section 2 says — the RECIPE.md hunks of the team's screen with the same job, nothing of your own — and put the RevenueCat keys into lib/in_app_purchase/constant.dart (REVENUECAT_APPLE_KEY / REVENUECAT_GOOGLE_KEY, build skill L12; none → left empty) with section 9's entitlement id, and section 9's "useCount" (and any "show<Plan>Plan" set to false) into config.json. For every key in CONTRACT.md's "Provided keys" that a native SDK reads, run \`${P} secret native <NAME> android:<placeholder> ios:<variable>\` and wire them (build skill L12). Make the app icon from CONTRACT.md's "App icon" line, only this way (build skill U13): \`node "${ROOT}/scripts/app-icon.mjs" "$(pwd)" <the arguments that line gives>\` — if it refuses, the contract's choice was not recorded: file a major finding and use no other icon. Doc comments on the stubs say which criteria each serves. \`flutter analyze\` must succeed. Then \`${GIT_COMMIT} "app-factory: interface"\`.
@@ -390,7 +402,9 @@ Finish with \`${P} handoff interface "<what exists, where>"\`.`,
   )
 }
 for (const [gi, g] of groups.entries()) {
-  const G = `Feature group ${gi + 1} of ${groups.length}: "${g.name}" — criteria ${g.criteria.join(', ')}. Build only what these criteria and their fields in CONTRACT.md need (rule L9: nothing that is not in the contract; file ideas as PROPOSAL findings). A criterion the brief shows as blocked is built up to its missing piece only. Earlier groups are done: do not change their behaviour except to fix an open finding in your inbox.`
+  const todo = g.criteria.filter((c) => !DONE.has(c))
+  if (EX && !todo.length) { log(`group ${g.name}: every criterion (${g.criteria.join(', ')}) already passes its tests — kept as built, not built again`); continue }
+  const G = `Feature group ${gi + 1} of ${groups.length}: "${g.name}" — criteria ${g.criteria.join(', ')}. Build only what these criteria and their fields in CONTRACT.md need (rule L9: nothing that is not in the contract; file ideas as PROPOSAL findings). A criterion the brief shows as blocked is built up to its missing piece only. Earlier groups are done: do not change their behaviour except to fix an open finding in your inbox.${EX ? ` This folder already holds the app as an earlier run left it (audited at the start of this build: ${existing.note || ''}). ${g.criteria.length > todo.length ? `${g.criteria.filter((c) => DONE.has(c)).join(', ')} already pass their tests — keep their code and tests as they are. ` : ''}Build only ${todo.join(', ')}, from the files already here: read them first, then extend or fix them — never create again a file, screen, stub or test that exists${existing.sharedLayer ? ', and keep the shared layer (theme, routes, AppKeys, models) — add to it only what is missing' : ''}.` : ''}`
   if (PAR_BUILD) {
     const own = STACK.own
     const res = await parallel([

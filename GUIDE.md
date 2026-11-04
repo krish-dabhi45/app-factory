@@ -118,7 +118,7 @@ app-factory has four commands; everything else in it (the flutter-app, flutter-a
 
 ### 4a. App dev without PRD — rebuild an existing app with a new theme
 
-For an app you want rebuilt with **all of its functionality** and a **different theme and colours**, when you have no PRD and no Figma file. In an empty project folder (the app's `.apk`, `.apks`, `.xapk` or `.apkm` may be in it):
+For an app you want rebuilt with **all of its functionality** and a **different theme and colours**, when you have no PRD and no Figma file. In an empty project folder (the app's `.apk`, `.apks`, `.xapk` or `.apkm` may be in it), or in the folder of an earlier run of this command, which is continued (see "A folder with earlier work" below):
 
 ```
 /app-factory:app-dev-without-prd {"app":"https://play.google.com/store/apps/details?id=<package>","name":"<new app name>"}
@@ -137,6 +137,17 @@ The link may be a Google Play link, an App Store link or the app's website; `nam
    - any S, F, D or P id seen in the source app that is not in `PRD.md` (nothing seen is dropped silently — a left-out one is in Coverage with its reason), a cited id or URL the evidence does not have, a file named that does not exist;
    - a theme missing one of the ten roles, an on-colour below 4.5:1 (WCAG AA), or a primary or secondary within 60° of hue of the source's (measured from its screenshots with `source-app.mjs palette`).
 4. It then starts `/app-factory:build-app {"noFigma":true}` in the same chat: contract and questions from `PRD.md`, then the build, tests, senior QA and final audit as always. The `colors` gate holds the code to `source-app/theme.json`'s colours; the old-theme screenshots are evidence only, never a pixel reference.
+
+**A folder with earlier work** is continued, never started over. The Source step runs `node scripts/source-app.mjs status .` (JSON: the F, D and S ids in `store.md`, `static.md` and `walk.md` — 0 when the file is missing or the walk reached no screen —, `PRD.md` and its `check` problem count, `CONTRACT.md`, an app project — `pubspec.yaml`, `project.yml`, `settings.gradle(.kts)`, `package.json` or a `.xcodeproj` —, the `.dart` files in `lib/`), then:
+
+| In the folder | What runs |
+|---|---|
+| `CONTRACT.md` | nothing here — `nextStep` = `/app-factory:build-app {"stage":"build","noFigma":true}` |
+| `PRD.md` with 0 `check` problems | nothing here — `nextStep` = `/app-factory:build-app {"noFigma":true}` |
+| `source-app/` evidence, no ready `PRD.md` | only the audits whose file has no id (a walk with 0 screens runs again when an APK is in the folder); the Report continues an existing `PRD.md` — check first, fix what it lists |
+| a PRD, or an app, and no `source-app/` | stops: not this command's work |
+
+`/app-factory:build-app` with `"stage":"build"` does the same for code: an **existing work** step (read only) runs `flutter analyze` and the unit and widget tests, and sorts every contract criterion into done (a test named after it passed), failing or missing. With the shared layer present (`lib/main.dart`, theme, routes, `lib/ui/core/app_keys.dart`, no analyze error) there is no interface step; a group whose criteria are all done is not built again; the other groups' builders get the list of what already passes and extend the files that are there. The gate, the device tests, senior QA and the final audit then run over the whole app as always.
 
 Not copied into the new app: the source's name, logo, icon, illustrations, marketing texts, keys, IDs and servers. A feature that needs a backend (sign-in, a cloud database, a paid API) goes through the contract's Missing keys step like any PRD: a free no-key service for now, a "not available" message, or your key.
 

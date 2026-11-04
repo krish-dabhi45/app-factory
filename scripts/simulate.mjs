@@ -220,3 +220,12 @@ check(x.res.done === true && bad(x).length === 0, 'done, prompts clean')
 x = await sim('no phone connected: as before', { stage: 'build' })
 check(!x.calls.some((c) => /\((iPhone|phone)\)/.test(c)) && x.calls.includes('test r1 Android runner') && !x.along['test r1 Android runner'].some((l) => /iOS runner/.test(l)), 'without phones: simulators, then the emulator after them — unchanged')
 
+
+x = await sim('build in a folder that already has the app: continues from it', { stage: 'build' }, { 'existing work': { existing: true, sharedLayer: true, analyzeErrors: 0, done: ['AC1'], failing: [], missing: ['AC2'], note: '127 .dart files, 0 errors, 240 tests' } })
+show(x)
+check(!x.calls.includes('interface') && !x.calls.some((c) => /: items$/.test(c)) && x.calls.includes('logic: settings'), 'shared layer kept (no interface step); the group whose criteria pass is not built again; the rest is')
+check(/Build only AC2, from the files already here/.test(x.prompts['logic: settings']) && x.logs.some((l) => /group items: every criterion/.test(l)) && bad(x).length === 0, 'the builders extend the existing files; prompts clean')
+x = await sim('build in a new folder: as before', { stage: 'build' }, { 'existing work': { existing: false, sharedLayer: false, done: [], failing: [], missing: [] } })
+check(x.calls.includes('interface') && x.calls.includes('logic: items') && !/files already here/.test(x.prompts['logic: items']), 'no existing work: interface step and every group run')
+x = await sim('build in a folder with code in another structure: kept, not replaced', { stage: 'build' }, { 'existing work': { existing: true, sharedLayer: false, analyzeErrors: 2, done: [], failing: [], missing: ['AC1', 'AC2'], note: '9 .dart files, 2 errors, no test/ folder' } })
+check(x.calls.includes('interface') && /never replace an existing file with a stub/.test(x.prompts.interface) && x.calls.includes('logic: items') && /Build only AC1, from the files already here/.test(x.prompts['logic: items']) && bad(x).length === 0, 'the interface step adds only the missing shared pieces; every group extends the files there')

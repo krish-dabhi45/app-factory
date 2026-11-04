@@ -2,7 +2,7 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
-## 0.49.0 — 2026-11-04 — not committed
+## 0.49.0 — 2026-11-04 — commit 3cae25e
 
 **Ask every question, then one command does it all:** `/app-factory:app-dev-without-prd` asks every open question — before the audit, when the walk fails, and before `PRD.md` — and waits for the answers; `/app-factory:build-app` asks every contract question (no cap of 4, no 5-minute fallback); ads are added after development and before the device tests; the audit fixes G1, G2, G4, G5 and G6 from the Repair Coach audit; G3 (where the walk runs) is a start question. 10 files besides this entry.
 

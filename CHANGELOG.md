@@ -2,7 +2,7 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
-## 0.50.0 — 2026-11-04 — not committed
+## 0.50.0 — 2026-11-04 — commit 5381789
 
 **Ads fixes found on the IPTV app (2026-10-30 to 2026-11-03):** the splash interstitial on a fresh install, a build on Gradle 9, `config.json` keys added after the wiring, a release build that hangs on its launch screen, a system crash read as the app's, and Facebook's `"11"`. These are the uncommitted ads changes listed under "Not in this version" in 0.47.0, 0.48.0 and 0.49.0. 7 files besides this entry.
 

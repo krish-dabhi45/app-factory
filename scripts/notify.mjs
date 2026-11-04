@@ -2,7 +2,7 @@
 // Notification hook (hooks/hooks.json, async): a desktop notification when Claude needs you or has finished.
 //   Notification (permission prompt, question dialog, agent needs input) → its message
 //   PreToolUse AskUserQuestion → the question
-//   Stop → app-factory's questions waiting (the 5-minute fallback is running), or "Finished — ready for your review"
+//   Stop → "Finished — ready for your review" (app-factory's questions come through AskUserQuestion above)
 // macOS: alerter if installed (click → VS Code), else osascript; skipped while VS Code or a terminal is in front.
 // Linux: notify-send. Windows: a PowerShell balloon. A system without the tool: nothing happens, never an error.
 // Not sent when the user's own settings already run a notification hook (attention.sh): Claude Code runs plugin and
@@ -22,8 +22,6 @@ export function message(e) {
   if (e.hook_event_name === 'PreToolUse') return { text: (e.tool_input && e.tool_input.questions && e.tool_input.questions[0] && e.tool_input.questions[0].question) || 'Claude has a question', sound: 'Glass' }
   if (e.hook_event_name === 'Stop') {
     if (e.stop_hook_active) return null
-    const last = String(e.last_assistant_message || '')
-    if (/no reply in 5 minutes I continue with the recommended options/i.test(last)) return { text: 'app-factory: questions are waiting — no reply in 5 minutes uses the recommended options', sound: 'Glass' }
     return { text: 'Finished — ready for your review', sound: 'Hero' }
   }
   return null
@@ -63,7 +61,6 @@ function frontIsEditor() {
 function selftest() {
   assert.equal(message({ hook_event_name: 'Notification', message: 'Claude needs your permission to use Bash' }).text, 'Claude needs your permission to use Bash')
   assert.equal(message({ hook_event_name: 'PreToolUse', tool_input: { questions: [{ question: 'Which Figma file?' }] } }).text, 'Which Figma file?')
-  assert.match(message({ hook_event_name: 'Stop', last_assistant_message: 'Reply like Q1: 2, or type your own answer. With no reply in 5 minutes I continue with the recommended options.' }).text, /questions are waiting/)
   assert.equal(message({ hook_event_name: 'Stop', last_assistant_message: 'Done.' }).sound, 'Hero')
   assert.equal(message({ hook_event_name: 'Stop', stop_hook_active: true }), null)
   const n = { text: "it's done", sound: 'Hero' }

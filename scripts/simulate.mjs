@@ -21,7 +21,7 @@ async function sim(name, args, over = {}) {
     if (label === 'senior QA setup') return { appPath: 'a', bundleId: 'x' }
     if (label.startsWith('senior QA')) return { scenarios: ['1'], filed: [], ...st() }
     if (label.startsWith('final audit')) return { verdict: 'pass', passing: [], fixed: [], removed: [], ...st() }
-    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, output: 'ok' }
+    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, copiedOk: true, output: 'ok' }
     if (label.startsWith('lessons')) return { timing: 'ended', cleanup: 'cleanup: freed 1 MB' }
     return null
   }
@@ -50,15 +50,15 @@ x = await sim('contract stage, user chose no Figma', { noFigma: true })
 show(x); check(x.res.questions?.length === 1 && x.calls.includes('contract'), 'continues to the contract and its questions')
 const opt = [{ label: 'Yes (Recommended)', description: 'a' }, { label: 'No', description: 'b' }]
 const qq = (id, ask) => ({ id, area: 'logic', header: id, question: `${id}?`, options: opt, affects: 'AC1', ask, why: 'w' })
-x = await sim('contract stage: only the important questions are asked, with a 5-minute fallback', { noFigma: true }, { contract: { claimed: true, projectDir: '/p/app', features: [], groups: [], assumed: [], questions: [qq('Q1', true), qq('Q2', false), qq('Q3', true), qq('Q4', true), qq('Q5', true), qq('Q6', true)] } })
+x = await sim('contract stage: every question is asked and the run waits for the answers', { noFigma: true }, { contract: { claimed: true, projectDir: '/p/app', features: [], groups: [], assumed: [], questions: [qq('Q1', true), qq('Q2', false), qq('Q3', true), qq('Q4', true), qq('Q5', true), qq('Q6', true)] } })
 show(x)
-check(/only the 4 question\(s\)[^—]*\(Q1, Q3, Q4, Q5\)/.test(x.res.nextStep) && /The other 2 question\(s\) use their recommended option/.test(x.res.nextStep), 'asks only questions marked ask, at most 4; the rest use the recommended option')
-check(/run_in_background true and the command `sleep 300`/.test(x.res.nextStep) && /not with AskUserQuestion/.test(x.res.nextStep), 'asks in a chat message and starts a 5-minute background timer')
-const toArgs = x.res.nextStep.match(/The timer ends first[^\n]*?with args (\{.*?\]\})/)
-check(toArgs && JSON.parse(toArgs[1]).answers.map((a) => `${a.id}:${a.answer}:${a.by}`).join() === 'Q1:Yes (Recommended):timeout,Q3:Yes (Recommended):timeout,Q4:Yes (Recommended):timeout,Q5:Yes (Recommended):timeout', 'on timeout: valid build args with the recommended option for every asked question')
+check(/Ask the user ALL 6 question\(s\)[^—]*\(Q1, Q2, Q3, Q4, Q5, Q6\)/.test(x.res.nextStep) && /AskUserQuestion tool, up to 4 questions per call/.test(x.res.nextStep), 'asks every question (no cap of 4) with AskUserQuestion, 4 per call')
+check(!/sleep 300|timer ends|5 minutes/.test(x.res.nextStep) && /never start a timer: wait for the user's answers however long they take/.test(x.res.nextStep), 'no timer: it waits for the answers')
+const toArgs = x.res.nextStep.match(/with args (\{"stage":"build"[^\n]*?"answers":\[)/)
+check(toArgs && /"by":"user"/.test(x.res.nextStep) && /"noFigma":true/.test(toArgs[1]), 'the relaunch carries every answer (by user) and keeps noFigma')
 check(/decisions --questions <that file>/.test(x.prompts.contract) && !/write[^.]*\.pipeline\/questions/.test(x.prompts.contract), 'the contract step records every question for DECISIONS.md through the command, not by editing .pipeline/')
-x = await sim('contract stage: no question needs the user', { noFigma: true }, { contract: { claimed: true, projectDir: '/p/app', features: [], groups: [], assumed: [], questions: [qq('Q1', false)] } })
-check(/No question needs the user \(1 settled/.test(x.res.nextStep), 'nothing important → straight to the build')
+x = await sim('contract stage: no open question', { noFigma: true }, { contract: { claimed: true, projectDir: '/p/app', features: [], groups: [], assumed: [], questions: [] } })
+check(/No question is open/.test(x.res.nextStep), 'no open question → straight to the build')
 x = await sim('build: answers are recorded in DECISIONS.md', { stage: 'build', answers: [{ id: 'Q1', answer: 'No', isDefault: false, by: 'user' }] })
 check(/decisions --answers <that file>/.test(x.prompts['setup (approved contract)']), 'the build records the answers and rewrites DECISIONS.md through the command')
 x = await sim('a key pasted as an answer never reaches an agent', { stage: 'build', answers: [{ id: 'Q2', answer: 'AIzaSyD-test0123456789abcdefghijklmnopq', isDefault: false, by: 'user' }] })
@@ -99,7 +99,7 @@ x = await sim('SwiftUI on Linux stops at once', { stage: 'build', stack: 'swiftu
 check(x.res.aborted && x.logs.some((l) => /SwiftUI stack needs macOS/.test(l)), 'SwiftUI without a Mac: stopped with the reason, locks released')
 x = await sim('faster start: batching, slim contract result, generated design documents', { figma: 'https://www.figma.com/design/abc/x' }, { contract: { claimed: true, projectDir: '/p/app', features: [], groups: [], assumed: [], questionCount: 62, questions: [qq('Q3', true), qq('Q9', true)] } })
 check(Object.entries(x.prompts).every(([, v]) => /Batch independent actions: reads, lookups/.test(v)), 'every agent prompt asks for independent actions in one turn')
-check(/The other 60 question\(s\) use their recommended option/.test(x.res.nextStep) && /\(Q3, Q9\)/.test(x.res.nextStep) && /Return in "questions" ONLY the questions whose ask is true/.test(x.prompts.contract), 'the contract returns only the asked questions; the chat counts the rest from questionCount')
+check(/Ask the user ALL 2 question\(s\)[^—]*\(Q3, Q9\)/.test(x.res.nextStep) && /Return in "questions" EVERY question/.test(x.prompts.contract) && !/at most 4/.test(x.prompts.contract), 'the contract returns every question; none is settled silently')
 check(/design-docs\.mjs" slugs design/.test(x.prompts['design import']) && /design-docs\.mjs" build design/.test(x.prompts['design import']) && !/6\. Map everything, ONLY from the MCP responses/.test(x.prompts['design import']) && /assets\/<slug>-<the file name in the response>/.test(x.prompts['design import']), 'the import names files by slug and writes its documents with design-docs.mjs')
 x = await sim('stuck runs and layout checks in the build', { stage: 'build' })
 check(/stale "<the log>" --device S1 --platform ios --app x/.test(x.prompts['test r1 iOS runner 1']) && /device-reset <device> --platform android/.test(x.prompts['test r1 Android runner']) && /app-restart/.test(x.prompts['test r1 iOS runner 1']), 'every runner gets the check → app restart → device reset steps for its own device and app')
@@ -229,3 +229,19 @@ x = await sim('build in a new folder: as before', { stage: 'build' }, { 'existin
 check(x.calls.includes('interface') && x.calls.includes('logic: items') && !/files already here/.test(x.prompts['logic: items']), 'no existing work: interface step and every group run')
 x = await sim('build in a folder with code in another structure: kept, not replaced', { stage: 'build' }, { 'existing work': { existing: true, sharedLayer: false, analyzeErrors: 2, done: [], failing: [], missing: ['AC1', 'AC2'], note: '9 .dart files, 2 errors, no test/ folder' } })
 check(x.calls.includes('interface') && /never replace an existing file with a stub/.test(x.prompts.interface) && x.calls.includes('logic: items') && /Build only AC1, from the files already here/.test(x.prompts['logic: items']) && bad(x).length === 0, 'the interface step adds only the missing shared pieces; every group extends the files there')
+
+const withAds = { claimed: true, projectDir: '/p/app', features: [{ id: 'AC1', title: 'a' }, { id: 'AC2', title: 'b' }, { id: 'AC3', title: 'ad' }], groups: [{ name: 'items', criteria: ['AC1'] }, { name: 'settings', criteria: ['AC2'] }, { name: 'ads', criteria: ['AC3'] }], blocked: [], assumed: [], questions: [], simulatorId: 'SIM1', hasDesign: false }
+const adsDone = { already: false, base: 'abc1234', changesOk: true, proofOk: true, placements: 5, report: 'r' }
+x = await sim('ads after development: gate → ads → audit → commit → testing', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: adsDone, 'ads audit': { rows: 12, fails: [] } })
+show(x)
+const at = (l) => x.calls.indexOf(l)
+check(!x.calls.some((c) => /: ads$/.test(c)) && at('integrate + gate') < at('ads') && at('ads') < at('ads audit') && at('ads audit') < at('ads commit') && at('ads commit') < at('devices') && x.res.done === true, 'the ads group is not built with the others; ads run after the gate and before the device tests and senior QA')
+check(/a feature group never writes ads code/.test(x.prompts['logic: items']) && /AC3/.test(x.prompts.ads) && /step 9b is NOT yours/.test(x.prompts.ads) && /Do step 9b/.test(x.prompts['ads audit']) && bad(x).length === 0, 'builders write no ads; the ads agent follows the ads-implementation steps; 9b is a separate agent')
+x = await sim('ads audit finds a FAIL → fixed in round 2', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: adsDone, 'ads r2': adsDone, 'ads audit': { rows: 12, fails: ['lib/home.dart:40 | native | no RECIPE.md hunk'] }, 'ads audit r2': { rows: 12, fails: [] } })
+check(x.calls.includes('ads r2') && /lib\/home\.dart:40/.test(x.prompts['ads r2']) && x.calls.includes('ads commit') && x.res.done === true, 'an audit FAIL goes back to the ads agent with the FAIL lines; committed once the audit is clean')
+x = await sim('ads already proven by an earlier run → not redone', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: { ...adsDone, already: true } })
+check(!x.calls.includes('ads audit') && !x.calls.includes('ads commit') && x.res.done === true, 'a proven "app-factory: ads" commit is kept')
+x = await sim('ads never pass → not done', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: { ...adsDone, proofOk: false }, 'ads r2': { ...adsDone, proofOk: false }, 'ads r3': { ...adsDone, proofOk: false }, 'ads audit': { rows: 1, fails: [] }, 'ads audit r2': { rows: 1, fails: [] }, 'ads audit r3': { rows: 1, fails: [] } })
+check(x.res.done === false && x.calls.includes('devices') && x.logs.some((l) => /ads not done after 3 round/.test(l)), 'ads unproven after 3 rounds: testing still runs, the run is not done')
+x = await sim('a source-app file in the new app → not done', { stage: 'build' }, { 'final checks': { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, copiedOk: false, output: 'SOURCE FILES COPIED (1)' } })
+check(x.res.done === false && /source-app\.mjs" copied \./.test(x.prompts['final checks']), 'the copy check runs at the end and blocks done')

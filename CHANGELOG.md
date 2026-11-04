@@ -2,6 +2,67 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.49.0 — 2026-11-04 — not committed
+
+**Ask every question, then one command does it all:** `/app-factory:app-dev-without-prd` asks every open question — before the audit, when the walk fails, and before `PRD.md` — and waits for the answers; `/app-factory:build-app` asks every contract question (no cap of 4, no 5-minute fallback); ads are added after development and before the device tests; the audit fixes G1, G2, G4, G5 and G6 from the Repair Coach audit; G3 (where the walk runs) is a start question. 10 files besides this entry.
+
+### Added
+
+- `scripts/simulate-without-prd.mjs` (63 lines): runs `workflows/app-dev-without-prd.js` with fake agents through 10 folder states and prints `ok` or `FAIL` for 26 checks; exit 1 on a FAIL. States: start (unzipped APK, split APKs missing, a phone has the app); answers given (pulled from the phone, walk on the phone); the walk reaches no screen; Play on the emulator after a failed walk, with store and static evidence kept; gaps before `PRD.md`; gaps answered and one more found by the report; no walk chosen; `CONTRACT.md` present; `PRD.md` ready; the walk agent returns nothing.
+- `scripts/source-app.mjs`:
+  - `hashes <dir>`: one line `<sha1> <W>x<H>|- <path>` for every file of an unzipped APK's `res/` and `assets/` except `.xml`, `.arsc`, `.dex`; pixel size from the PNG, WebP (VP8, VP8L, VP8X) or JPEG header. On `Repair Coach AI/`: 82 lines in 0.07 s.
+  - `copied <project>`: exit 1 when a file under `assets/`, `android/app/src/main/res/` or `ios/Runner/` has the bytes of a `source-app/res-hashes.txt` file, or is an image with the same name stem and pixel size (a converted copy). Files equal to a plugin template file are skipped; launcher and splash names (`ic_launcher*`, `launch_image`, `launch_background`, `splash`, `icon-app-*`, `appicon*`) count only by bytes. No `res-hashes.txt` → passes with "no APK files were audited".
+  - L ids (`- L<nn> · <layout file>`) for layout files, cited as `[static: L12]` and covered like S, F, D and P ids.
+- `workflows/build-app.js`, **Ads** phase between the gate and Explore: an `ads` agent does the `skills/ads-implementation` steps on CONTRACT.md's `ads` group (step 6 maps the plan to the contract's ads criteria; it also writes `integration_test/ads_flow_test.dart`, one test per placement and one Premium journey), then a separate read-only `ads audit` agent does step 9b. A FAIL goes back to `ads r2` / `ads r3` with the FAIL lines; a clean audit with `changes` and `proof` passing → `ads commit` (`app-factory: ads`). A `app-factory: ads` commit whose `proof` exits 0 → `already`, nothing redone. `done` now also needs the ads (`adsOk`); the result has `ads` and `adsAudit`.
+
+### Changed
+
+- `workflows/build-app.js`, questions: the contract step gives every question `ask = true` and returns all of them; `nextStep` (new `askAll`) tells the chat to ask ALL of them with AskUserQuestion, up to 4 per call, in order, never start a timer and wait for the answers, then relaunch with one answer per question (`"by":"user"`). The 5-minute `sleep 300` timer and the timeout relaunch are removed. The relaunch args keep `noFigma`.
+- `workflows/build-app.js`, ads order: CONTRACT.md section 9 puts every placement's criterion in one group `ads`, the last of section 5. The build loop builds every other group (`devGroups`); the builders' skill text says a feature group never writes ads code. Phases in `meta`: Ads added after Build.
+- `workflows/build-app.js`, final checks: also run `source-app.mjs copied .` → `copiedOk`; `done` needs it.
+- `scripts/pipeline.mjs` `decisions`: no cap of 4 — every question marked `ask` is listed as asked; "no reply in 5 minutes" appears in DECISIONS.md only when an old record has a timeout. Selftest: 6 questions → 5 asked, 1 not asked.
+- `scripts/source-app.mjs` `check` (G5):
+  - a requirement line needs `[walk: ..]`, `[store: ..]`, `[static: ..]`, `[web: ..]` or `[user]`; `ASSUMED` or `NOT OBSERVED` only on a line that also has `[user]`;
+  - every quoted text and backticked name (4 characters or more, no `<placeholder>`) in a tagged line must be in `store.md`, `static.md`, `walk.md` or `answers.md` (case and whitespace ignored, a literal `\n` read as a space); a text with the new name and a PRD heading are skipped;
+  - section App must start with `- Name: **<name>**`;
+  - with `--apk`, `walk.md` must have a `## S<nn>` screen unless `--no-walk`.
+  On Repair Coach's PRD.md (0.47.0's output): 137 problems, of them 77 guesses without `[user]` and 11 texts not in the evidence (`Step n/4`, `back_button`, `Secured with the App Store`, `Report a result`, `Billed per year`, `App Store settings`, `Go to App Store`, `500 left`, `N left`, a composed category path, a reworded palette text).
+- `scripts/source-app.mjs` `status`: reads `source-app/answers.md`; "Answer: Go on without the walk" → the PRD count uses `--no-walk`.
+- `workflows/app-dev-without-prd.js`:
+  - every relaunch carries all answers (`args.answers`); answered ids are never asked again; an option label's " (Recommended)" is dropped before comparing; the Source agent writes `source-app/answers.md`; agents never ask directly — they return `questions` and the run stops with `stage: "questions"` and an `askAll` `nextStep` that relaunches this workflow.
+  - Source (G1): an unzipped APK folder (`AndroidManifest.xml` + `classes.dex`) is zipped into the scratch folder for the file audit (`unzipped`, not installable); `splitsMissing` = `com.android.vending.splits.required` true and no split APK; `pairip` = `com.pairip` in the manifest; `installable`; `phone` / `phoneModel` = a connected phone where `pm path` lists the app. Questions: `apk` (not installable: Pull from my phone / I'll add the APK set / Go on without the walk), `walk` (G3: Plugin emulator / Play on emulator / My phone, each only when it applies; one option → used without asking; the code drops `walk` when the user chose no walk), `name` (3 proposed names), `link` (more than one candidate app). "I'll add the APK set" with the set still incomplete → stop with what is missing.
+  - Walk: per device — `emulator` (install, Play licence screen → walked 0), `play` (opens `market://details?id=<package>`, the user installs; polls `pm path` every 30 s up to 30 minutes; the Google account stays), `phone` (`phone save` / `phone restore`, no install, uninstall or data clear; first launch NOT OBSERVED). It runs without an APK when the device has the app.
+  - G2: a walk that ran and reached no screen, or returned nothing → question `walkfail-<n>` (another device, the same again, or Go on without the walk) before any PRD work.
+  - APK files (G4): step 8, every own layout (`res/layout*/` minus 28 library prefixes) via `aapt2 dump xmltree` → L ids; step 9, `dexdump -d` of every `classes*.dex` → for each text group, the method that reads those string fields gives the table (`D<nn> · data: <table> (dexdump: class <class> method <method>)`); step 10, `source-app/res-hashes.txt`. Returns `layouts` and `dataTables`.
+  - New phase **Questions**: a read-only `gaps` agent lists every behaviour PRD.md needs that the evidence does not show exactly, one question each (`P1`, `P2` and on); the run stops to ask them. It runs once (skipped when any `P` answer exists).
+  - Report: no guess — a missing behaviour is returned as another `P<n>` question with `ready=false`; the first line is `- Name: **<name>** [user]`; texts copied from the evidence; Sources lists every answer; `check` gets `--no-walk` only when the user chose no walk or no device could run it.
+  - The last `nextStep` runs build-app through contract, development, ads, device tests, senior QA and final audit without waiting in between.
+- `scripts/notify.mjs`: the Stop branch for "no reply in 5 minutes I continue with the recommended options" and its selftest line removed — questions come through AskUserQuestion, whose PreToolUse notification names the first question.
+- `scripts/simulate.mjs`: the question scenarios now check that every question is asked with AskUserQuestion and no timer; 6 new scenarios: ads after the gate and before `devices`, an audit FAIL → `ads r2`, ads already proven → kept, ads never passing → not done but tested, a copied source file → not done. 105 `ok` lines.
+- `GUIDE.md`: section 4a rewritten for the one command (questions, the walk devices, L ids and data tables, the check rules, the copy check); the build table's step 2 (every question, no timer) and an Ads row; the notification row; section 6 runs `simulate-without-prd.mjs`. `README.md`: the file rows for the no-PRD command, `simulate-without-prd.mjs` and `notify.mjs`; build steps 1 and 2.
+- `.claude-plugin/plugin.json`: version 0.48.0 → 0.49.0.
+
+### Checked (all passed)
+
+- `node scripts/source-app.mjs selftest` (adds: a guess without `[user]` caught and with it passing; an invented backticked name caught while an evidence text, the new name and a PRD heading pass; the Name line required; a walk with no screen failing unless `--no-walk`; WebP and PNG sizes; a converted copy and a byte copy caught while a new image and a launcher icon pass), `node scripts/pipeline.mjs selftest`, `node scripts/notify.mjs selftest`, `node scripts/configure.mjs selftest`, `node scripts/self-configure.mjs selftest`.
+- `node scripts/simulate.mjs`: exit 0, no `FAIL` line.
+- `node scripts/simulate-without-prd.mjs`: exit 0, `all ok`.
+- `source-app.mjs copied` on a scratch copy of Repair Coach's `assets/` and `android/app/src/main/res/` with `hashes` of `Repair Coach AI/`: exit 1, 9 files — `assets/flags/{brazil,france,germany,india,portugal,russia,saudi_arabia,spain}.png` (the APK's `drawable-nodpi-v4/*.webp`, 44x33) and `assets/images/update_database.png` (same bytes as `res/drawable/img_update_database.png`). Before the launcher-name rule it also listed 15 `ic_launcher*` files by size only.
+- `dexdump` (build-tools 36.1.0) on Repair Coach's `classes3.dex`: `subcat_cleaning_tech` is read in class `Ls81;` method `b`, which holds the whole category tree.
+
+### Not checked
+
+- A real run of either command with the new questions: no AskUserQuestion dialog shown from a workflow's `nextStep`, no relaunch with answers, no `gaps` agent on real evidence, no Ads phase on a real app.
+- The walk on "Play on emulator" (a Google sign-in on `af-standard`) and on "My phone"; whether a PairIP app installed from a full APK set opens past its licence screen.
+- The layout and `dexdump` steps on a Flutter, React Native or obfuscated-resource APK: a Flutter app's data is in `libapp.so` (step 4 `strings` only); React Native's `index.android.bundle` is not read beyond the framework check.
+- An App Store-only app (no Android version): no APK, no Android walk; the PRD rests on the store, the web and the answers.
+- `copied`: a source image renamed and resized is not caught; a source app that ships Flutter's default launcher icon would match the new app's default icon by bytes.
+- During development, an agent that meets a choice nothing covered still records a `DECIDED` finding; it cannot stop the run to ask.
+
+### Not in this version
+
+The uncommitted ads changes in the working tree before 0.48.0 are still not part of this version: `scripts/ads-install.mjs`, `scripts/release-check.mjs`, `templates/flutter/ads/config.json`, `skills/ads-implementation/SKILL.md`, `skills/flutter-ads/SKILL.md`, and their lines in `README.md` and `GUIDE.md` (the ads section).
+
 ## 0.48.0 — 2026-11-04 — commit 98f9fe1
 
 **Continue from the work in the folder:** `/app-factory:app-dev-without-prd` and `/app-factory:build-app` now start from what an earlier run left in the project folder, where before the first stopped on any `PRD.md`, `CONTRACT.md`, `pubspec.yaml` or `source-app/` and the second rebuilt every group (its interface step rewrote the shared layer as placeholders). 6 files.

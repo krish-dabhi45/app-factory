@@ -600,8 +600,8 @@ function colors(root) {
 const ALLOWED = ['lib/**', 'test/**', 'integration_test/**', 'assets/**', 'android/**', 'ios/**', 'design/**', 'pubspec.yaml', 'pubspec.lock',
   'analysis_options.yaml', 'l10n.yaml', 'devtools_options.yaml', 'CONTRACT.md', 'DECISIONS.md', 'README.md', '.gitignore', '.metadata']
 // DECISIONS.md: every question the contract step found, the options it had, which one the app is built with, and how that
-// choice was made — the user picked it, the user did not reply within 5 minutes, or it was never asked (not one of the most
-// important). Kept in the project for reviewing the plugin's questions and defaults.
+// choice was made — the user picked it, or (an unattended run) the recommended option. Every question is asked and the run
+// waits for the answers (user, 2026-11-04); "timeout" and "not asked" stay readable for records written before that.
 function decisions(root, a = []) {
   const qf = path.join(dir(), 'questions.json'), af = path.join(dir(), 'answers.json')
   const opt = (f) => { const i = a.indexOf(f); return i >= 0 ? a[i + 1] : null }
@@ -631,9 +631,7 @@ function decisions(root, a = []) {
   }
   if (!fs.existsSync(qf)) throw new Error('no questions recorded — run: decisions --questions <file with the contract\'s questions JSON>')
   const all = JSON.parse(fs.readFileSync(qf, 'utf8')), answered = fs.existsSync(af)
-  // the chat asks at most the first 4 marked "ask" (build-app.js); any further one is settled like an unasked question
-  const askIds = new Set(all.filter((q) => q.ask).slice(0, 4).map((q) => q.id))
-  const qs = all.map((q) => ({ ...q, ask: askIds.has(q.id) }))
+  const qs = all
   const ans = new Map((answered ? JSON.parse(fs.readFileSync(af, 'utf8')) : []).map((x) => [x.id, x]))
   const BY = { user: 'the user chose it', timeout: 'no reply within 5 minutes → recommended option', unattended: 'unattended run → recommended option' }
   const count = { user: 0, timeout: 0, unattended: 0, notAsked: 0, waiting: 0, skipped: 0 }
@@ -648,7 +646,7 @@ function decisions(root, a = []) {
     return `## ${q.id} · ${q.header} (${q.area})${q.ask ? ' · asked' : ''}\n${q.question}\nAffects: ${q.affects}\n${q.why ? `Why ${q.ask ? 'asked' : 'not asked'}: ${q.why}\n` : ''}\nOptions:\n${opts}\n\n**Selected: ${sel}** — ${by}\n`
   })
   const asked = qs.filter((q) => q.ask).length
-  const head = `# Decisions\n\n${qs.length} question(s): ${asked} asked, ${qs.length - asked} not asked (recommended option used). Chosen by the user: ${count.user}; skipped in the user's reply: ${count.skipped}; no reply in 5 minutes: ${count.timeout}; unattended: ${count.unattended}; waiting: ${count.waiting}.\nCONTRACT.md lines tagged with a question's id (e.g. "(Q3)") follow the selected option.\n`
+  const head = `# Decisions\n\n${qs.length} question(s): ${asked} asked, ${qs.length - asked} not asked (recommended option used). Chosen by the user: ${count.user}; skipped in the user's reply: ${count.skipped};${count.timeout ? ` no reply in 5 minutes: ${count.timeout};` : ''} unattended: ${count.unattended}; waiting: ${count.waiting}.\nCONTRACT.md lines tagged with a question's id (e.g. "(Q3)") follow the selected option.\n`
   fs.writeFileSync(path.join(root, 'DECISIONS.md'), [head, ...body].join('\n'))
   return `DECISIONS.md: ${qs.length} question(s), ${asked} asked — user ${count.user}, skipped ${count.skipped}, no reply ${count.timeout}, unattended ${count.unattended}, waiting ${count.waiting}, not asked ${count.notAsked}`
 }
@@ -1550,9 +1548,9 @@ function selftest() {
   assert.throws(() => decisions(dq), /no questions recorded/)
   fs.writeFileSync(path.join(dq, 'bad.json'), JSON.stringify([{ ...q('Q1', true), header: 'Thirteen char' }, { ...q('Q1', false), options: [{ label: 'Yes', description: 'a' }, { label: 'No', description: 'b' }] }]))
   assert.throws(() => decisions(dq, ['--questions', path.join(dq, 'bad.json')]), (e) => /Q1: header "Thirteen char" must be 1–12/.test(e.message) && /Q1: missing or repeated id/.test(e.message) && /first option's label must end with " \(Recommended\)"/.test(e.message))
-  assert.match(decisions(dq, ['--questions', path.join(dq, 'q.json')]), /6 question\(s\), 4 asked — user 0, skipped 0, no reply 0, unattended 0, waiting 4, not asked 2/) // Q6: a fifth "ask" is not asked
+  assert.match(decisions(dq, ['--questions', path.join(dq, 'q.json')]), /6 question\(s\), 5 asked — user 0, skipped 0, no reply 0, unattended 0, waiting 5, not asked 1/) // no cap: every "ask" is asked
   fs.writeFileSync(path.join(dq, 'a.json'), JSON.stringify([{ id: 'Q1', answer: 'No', isDefault: false, by: 'user' }, { id: 'Q2', answer: 'Yes (Recommended)', isDefault: true, by: 'timeout' }]))
-  assert.match(decisions(dq, ['--answers', path.join(dq, 'a.json')]), /user 1, skipped 2, no reply 1, unattended 0, waiting 0, not asked 2/) // Q2 timed out; Q4, Q5 skipped → recommended
+  assert.match(decisions(dq, ['--answers', path.join(dq, 'a.json')]), /user 1, skipped 3, no reply 1, unattended 0, waiting 0, not asked 1/) // Q2: an old timeout record; Q4–Q6 skipped → recommended
   const dmd = fs.readFileSync(path.join(dq, 'DECISIONS.md'), 'utf8')
   assert.match(dmd, /## Q1 · Q1 \(logic\) · asked[\s\S]*\*\*Selected: No\*\* — the user chose it/)
   assert.match(dmd, /## Q2[\s\S]*\*\*Selected: Yes\*\* — no reply within 5 minutes/)

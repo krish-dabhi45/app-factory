@@ -18,7 +18,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/flutter-ads/SKILL.md` in full before step 2. 
 
 ## 2. What the app already has — read, change nothing
 
-- **Its slots** — the ad code it left in comments: `grep -rnE "^\s*(//|/\*|\*).*\b(AdsVariable|AdsLoadUtil|AdsSplashUtils|AppOpenAdManager|onTapInter|onTapRewardCall|checkPurchaseNormal|NativeAdsWidget|BannerWidget|CollapsibleBannerWidget|showPrivacyOptionsForm)\b" lib`, the block comments around them (`/* … */` over several lines: read the file), `grep -n "^#.*google_mobile_ads\|^#.*purchases_flutter" pubspec.yaml`, and `MainActivity.kt` (a commented factory block). List each: file:line, what it is.
+- **Its slots** — the ad code it left in comments: `grep -rnE "^\s*(//|/\*|\*).*\b(AdsVariable|AdsLoadUtil|AdsSplashUtils|AppOpenAdManager|onTapInter|onTapRewardCall|checkPurchaseNormal|NativeAdsWidget|BannerWidget|CollapsibleBannerWidget|showPrivacyOptionsForm)\b" lib`, the block comments (`grep -rn "/\*" lib`, then read each block: a `/* … */` slot's ad lines do not start with `//`, so the first grep misses them — the IPTV home native was one), `grep -n "^#.*google_mobile_ads\|^#.*purchases_flutter" pubspec.yaml`, and `MainActivity.kt` (a commented factory block). List each: file:line, what it is.
 - **Its own ads files** — `ls lib/ads lib/AdsUtils lib/in_app_purchase 2>/dev/null`; in `lib/ads/ads_splash_utils.dart` its Remote Config parameter (`getValue("…")`) and its empty blocks.
 - **Its screens** — the app's file for each job of flutter-ads section 2's table (splash, intro, home, the `onTapInter` list, the reward-gated action, settings, the purchase): file and the tap that opens each. On the device (`flutter run -d <id>`): each screen once, its element list and one screenshot (`${CLAUDE_PLUGIN_ROOT}/skills/app-qa/SKILL.md` E2, E8: elements from the element list, never coordinates off a screenshot). Stop `flutter run`.
 
@@ -32,13 +32,13 @@ One row per RECIPE.md hunk: team file:line | the app's file (flutter-ads section
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" "$(pwd)" && "<flutter>" pub get
 ```
 
-Quote its lines (flutter-ads section 3 says what each does). `NOT DONE` lines are done in step 5, then it runs again until it prints none. What it wrote is never redone or edited by hand.
+Quote its lines (flutter-ads section 3 says what each does). `NOT DONE` lines are done in step 5, then it runs again: it adds what the wiring made readable (the `config.json` keys) and still lists a file wired by hand — the installer only knows whether a file is the team's; whether the hunks are in is checked by `changes` (T1–T3, R3), not by this list. What it wrote is never redone or edited by hand.
 
 ## 5. Wire — what the installer left, from RECIPE.md
 
 flutter-ads section 2, exactly:
 1. **The app's slots.** Remove the comment markers around the app's ad code and nothing else, and add the imports it needs, using the app's own paths.
-2. **Each NOT DONE file, RECIPE.md section by section.** Find the app's file with the same job. Each hunk's `+` lines go in as the team wrote them, at the same place relative to the same code; only a name of the team's app that the app lacks is replaced with the app's own. A `-` line is removed only where the app has the same line, noted for `--slot-edits <file:line at base>`. A team file the app has nothing for is noted for `--no-screen <team file>`.
+2. **Each NOT DONE file, RECIPE.md section by section.** Find the app's file with the same job. Each hunk's `+` lines go in as the team wrote them, at the same place relative to the same code; only a name of the team's app that the app lacks is replaced with the app's own. A `-` line is removed only where the app has the same line, noted for `--slot-edits <file:line at base>`; where the app's line is the same expression with its own value (`width: sw * 0.9` where the team had `width: sw`), the team's `+` line goes in with the app's value in the place of the team's old one (`… ? sw * 0.68 : sw * 0.9`), also noted. A team file the app has nothing for is noted for `--no-screen <team file>`.
 3. **No line of your own.** Not even where the team's code looks wrong: the PPT intro hides Continue while the intro native is on and shows its own Next/Done, and both go in as the team has them.
 4. **Keep each file's line endings.**
 5. Then run `"<flutter>" analyze` and fix only what the ads lines broke.

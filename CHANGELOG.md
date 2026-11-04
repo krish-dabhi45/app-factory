@@ -2,6 +2,39 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.50.0 — 2026-11-04 — not committed
+
+**Ads fixes found on the IPTV app (2026-10-30 to 2026-11-03):** the splash interstitial on a fresh install, a build on Gradle 9, `config.json` keys added after the wiring, a release build that hangs on its launch screen, a system crash read as the app's, and Facebook's `"11"`. These are the uncommitted ads changes listed under "Not in this version" in 0.47.0, 0.48.0 and 0.49.0. 7 files besides this entry.
+
+### Changed
+
+- `scripts/ads-install.mjs`:
+  - `install`, `lib/main.dart`: `isFirstTimeVisited = <prefs>.getBool("isFirstTime");` becomes `isFirstTimeVisited = <prefs>.getBool("isFirstTime") ?? false;`, as the team's `main.dart:16`. Left null on a fresh install, `loadInterSplash` (`isFirstTimeVisited != null`) skips the splash interstitial. A `main.dart` that never sets it → a NOT DONE line: add the team's line before `runApp`.
+  - `install`, `pubspec.yaml` (an app not on the team's base): with `android/gradle/wrapper/gradle-wrapper.properties` at Gradle 9 or newer, `google_mobile_ads: ^7.0.0` instead of the team's `^5.3.1` — 5.3.1 calls `configurations.all`, which Gradle 9 removed ("unknown property 'all'", IPTV on Gradle 9.3.1); the line says so.
+  - `install`, `config.json`: written again on every run — a key `lib/ads/ads_splash_utils.dart` reads and the file lacks is added, a value already there is kept (before: written only when missing, so an app whose ad lines were still commented got 28 keys and no ad id).
+  - `changes` T2: `lib/main.dart`'s `isFirstTime` line is not reported as gone (the installer adds `?? false`).
+  - `crashMine(text, pkg, pids)`: the crash buffer lines that hold the app's package or one of its pids; `health` (used by `seen`) reports only those — a system process crash (Bluetooth SIGABRT after an emulator boot) is not the app's.
+  - `launch`: FAIL "the app never drew its first screen" when logcat has no `Displayed <package>/` line after the watch (the IPTV release build hung on its launch screen with its process up); the `seen` cursor starts at the cleared log, so an ad shown during the launch (the splash ad) counts.
+  - `CHECKER` 2 → 3: `seen` / `launch` / `stress` records from before this version are STALE.
+  - `selftest`: the fresh app's NOT DONE list ends with `lib/main.dart`; a second `install` turns `getBool("isFirstTime");` into `?? false;`; `crashMine` drops a Bluetooth SIGABRT and keeps the app's FATAL EXCEPTION (2 lines) and its native crash (1 line).
+- `scripts/release-check.mjs`: O8 — `facebookId` / `facebookToken` in `config.json` still `"11"` or empty → an owner item: Facebook rejects `"11"` (GraphResponse 400, errorCode 190, IPTV on the emulator); `selftest` covers both flagged and real values.
+- `templates/flutter/ads/config.json`: `nativeHome` `"11"` → Google's native test unit `ca-app-pub-3940256099942544/2247696110`.
+- `skills/ads-implementation/SKILL.md`: step 2 finds block-comment slots with `grep -rn "/\*" lib` (the IPTV home native was one); step 4 says the installer's second run adds `config.json` keys and still lists a file wired by hand; step 5.2: an app line that is the team's expression with its own value gets the team's line with the app's value in place of the team's old one, noted for `--slot-edits`.
+- `skills/flutter-ads/SKILL.md`: section 1 (Facebook `"11"`, O8); section 2 (the IPTV intro image `sw * 0.9` → the team's ternary with `sw * 0.68 : sw * 0.9`); section 3 (the `main.dart` line); T2 (the `isFirstTime` exception).
+- `GUIDE.md` (ads section: Install, Remote Config) and `README.md` (the `ads-install.mjs` and `release-check.mjs` rows: the `main.dart` line, the T2 exception, O6, O7, O8).
+- `.claude-plugin/plugin.json`: version 0.49.0 → 0.50.0.
+
+### Checked (all passed)
+
+- `node scripts/ads-install.mjs selftest` (8.3 s): template = the builds, T1 T2 T3 R3 R4 N1, merge, fresh install, changes, crash detection, placements / proof, reset.
+- `node scripts/release-check.mjs selftest`.
+
+### Not checked
+
+- The Gradle 9 `google_mobile_ads` `^7.0.0` line: no selftest has a Gradle 9 wrapper; the reason in the code is the IPTV build of 2026-10-30, not a run in this version.
+- `launch`'s "never drew its first screen" check and the cursor change: they need a device; no run in this version.
+- The skill texts were not run by an agent.
+
 ## 0.49.0 — 2026-11-04 — commit 3cae25e
 
 **Ask every question, then one command does it all:** `/app-factory:app-dev-without-prd` asks every open question — before the audit, when the walk fails, and before `PRD.md` — and waits for the answers; `/app-factory:build-app` asks every contract question (no cap of 4, no 5-minute fallback); ads are added after development and before the device tests; the audit fixes G1, G2, G4, G5 and G6 from the Repair Coach audit; G3 (where the walk runs) is a start question. 10 files besides this entry.

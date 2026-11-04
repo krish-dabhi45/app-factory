@@ -275,6 +275,7 @@ const GRADLE_DEPS = [['implementation', 'com.android.support:multidex:1.0.3'], [
 const depLine = (kts, [c, d]) => d.startsWith('platform(') ? (kts ? `${c}(${d})` : `${c} ${d.replace(/"/g, "'")}`) : kts ? `${c}("${d}")` : `${c} '${d}'`
 const FB_PLUGINS = [['com.google.gms.google-services', '4.4.4'], ['com.google.firebase.crashlytics', '3.0.3']]
 
+const FIRST_TIME = /(isFirstTimeVisited\s*=\s*\w+\.getBool\(\s*["']isFirstTime["']\s*\))\s*;/
 export function install(root) {
   const a = appOf(root), done = [], todo = []
   const at = (...p) => path.join(root, ...p)
@@ -320,7 +321,11 @@ export function install(root) {
 
   // the team-base files of another base (or Kotlin Gradle): the team's lines added to the app's own file
   const fb = (f) => fallback.includes(f)
-  if (fb('pubspec.yaml')) for (const line of tpl('pubspec_lines.txt').trimEnd().split('\n')) {
+  // the team's google_mobile_ads 5.3.1 calls `configurations.all`, which Gradle 9 removed: the build fails ("unknown property 'all'",
+  // IPTV app on Gradle 9.3.1, 2026-10-30). 7.0.0 builds there and the team's lib/ads compiles and runs on it (every ad seen on the emulator).
+  const gradleMajor = Number((fs.existsSync(at('android/gradle/wrapper/gradle-wrapper.properties')) && read(at('android/gradle/wrapper/gradle-wrapper.properties')).match(/gradle-(\d+)\./) || [])[1] || 0)
+  if (fb('pubspec.yaml')) for (let line of tpl('pubspec_lines.txt').trimEnd().split('\n')) {
+    if (gradleMajor >= 9 && /^\s*google_mobile_ads:/.test(line)) { line = '  google_mobile_ads: ^7.0.0'; done.push(`pubspec.yaml: google_mobile_ads ^7.0.0, not the team's ^5.3.1 — the app builds with Gradle ${gradleMajor}, which 5.3.1 does not`) }
     const p = line.trim().split(':')[0], commented = new RegExp(`^#\\s*${p}:`, 'm')
     patch('pubspec.yaml', (s) => new RegExp(`^  ${p}:`, 'm').test(s), (s) => commented.test(s) ? s.replace(new RegExp(`^#\\s*(${p}:.*)$`, 'm'), '  $1') : s.replace(/^dependencies:\n/m, (x) => `${x}${line}\n`), p)
   }
@@ -378,14 +383,25 @@ export function install(root) {
   if (fs.existsSync(at(plist))) for (const [k, v] of [['GADApplicationIdentifier', 'ca-app-pub-3940256099942544~1458002511'], ['NSUserTrackingUsageDescription', 'This identifier will be used to deliver personalized ads to you.']])
     patch(plist, (s) => s.includes(`<key>${k}</key>`), (s) => s.replace(/\n<\/dict>\n<\/plist>/, `\n\t<key>${k}</key>\n\t<string>${v}</string>\n</dict>\n</plist>`), k)
 
-  // config.json: the value to publish under the app's parameter — every key the app's ads_splash_utils reads
-  if (!fs.existsSync(at('config.json')) && fs.existsSync(at('lib/ads/ads_splash_utils.dart'))) {
-    const code = blank(read(at('lib/ads/ads_splash_utils.dart')), true), test = JSON.parse(tpl('config.json')), cfg = {}
+  // main.dart: isFirstTimeVisited = getBool("isFirstTime") ?? false, as the team's main.dart:16 (not in the change: same before and
+  // after). Without `?? false` it is null on a fresh install and loadInterSplash (`isFirstTimeVisited != null`) skips the splash ad.
+  if (fs.existsSync(at('lib/main.dart'))) {
+    const s = read(at('lib/main.dart'))
+    if (FIRST_TIME.test(s)) { fs.writeFileSync(at('lib/main.dart'), s.replace(FIRST_TIME, '$1 ?? false;')); done.push('lib/main.dart: isFirstTimeVisited = getBool("isFirstTime") ?? false (the team\'s main.dart:16): null skipped the splash ad after install') }
+    else if (!/isFirstTimeVisited\s*=/.test(blank(s))) todo.push('lib/main.dart: set AdsVariable.isFirstTimeVisited = prefs.getBool("isFirstTime") ?? false; before runApp (the team\'s main.dart:16) — left null, the splash ad never shows')
+  }
+
+  // config.json: the value to publish under the app's parameter — every key the app's ads_splash_utils reads. Run again after the
+  // wiring: a key the code reads now and the file lacks is added (an app's ad lines were still commented on the first run: 28 keys,
+  // no ad id, IPTV 2026-10-30); a value already in the file is kept.
+  if (fs.existsSync(at('lib/ads/ads_splash_utils.dart'))) {
+    const code = blank(read(at('lib/ads/ads_splash_utils.dart')), true), test = JSON.parse(tpl('config.json'))
+    const had = fs.existsSync(at('config.json')) ? JSON.parse(read(at('config.json'))) : null, cfg = { ...had }, added = []
     for (const [, k] of code.matchAll(/mapValues1\["(\w+)"\]/g)) if (!(k in cfg)) {
       const d = (code.match(new RegExp(`mapValues1\\["${k}"\\]\\s*\\?\\?\\s*([^;,)\\s]+)`)) || [])[1]
-      cfg[k] = k in test ? test[k] : d === undefined ? '' : JSON.parse(d)
+      cfg[k] = k in test ? test[k] : d === undefined ? '' : JSON.parse(d); added.push(k)
     }
-    put(at('config.json'), JSON.stringify(cfg, null, 2) + '\n'); done.push(`added config.json (${Object.keys(cfg).length} keys: what lib/ads/ads_splash_utils.dart reads)`)
+    if (added.length) { put(at('config.json'), JSON.stringify(cfg, null, 2) + '\n'); done.push(had ? `config.json: added ${added.join(', ')} (read by lib/ads/ads_splash_utils.dart now)` : `added config.json (${added.length} keys: what lib/ads/ads_splash_utils.dart reads)`) }
   }
   return { done, todo }
 }
@@ -509,12 +525,12 @@ export function changes(root, base, { slotEdits = [], noScreen = [] } = {}) {
   const edited = []
   const teamRemoved = new Set(CHANGE.filter(isText).flatMap((f) => { const t = team(f); return lineDiff(t.before, t.after).removed.map(([l]) => l.trim()) }))
   const textFiles = own.filter(([f, x]) => x.status !== 'A' && /\.(dart|kt|swift|xml|gradle|kts|yaml|plist|json|pro)$/.test(f))
-  check('T2', 'The app\'s own lines are all still there, but the ones the team\'s change itself replaces (a commented-out line may come back live); no app file deleted',
+  check('T2', 'The app\'s own lines are all still there, but the ones the team\'s change itself replaces and lib/main.dart\'s isFirstTime line (the installer adds ?? false) (a commented-out line may come back live); no app file deleted',
     textFiles.flatMap(([f, x]) => {
       if (x.status === 'D') return [`\`${f}\` deleted`]
       const was = atBase(f), is = now(f); if (was === null || is === null) return []
       const nowLines = new Set(is.split('\n').flatMap((l) => [l.trim(), norm(l), bare(l)]))
-      return lf(was).split('\n').map((l, i) => [l, i + 1]).filter(([l]) => bare(l) && !nowLines.has(l.trim()) && !nowLines.has(norm(l)) && !nowLines.has(bare(l)) && !teamRemoved.has(l.trim()))
+      return lf(was).split('\n').map((l, i) => [l, i + 1]).filter(([l]) => bare(l) && !nowLines.has(l.trim()) && !nowLines.has(norm(l)) && !nowLines.has(bare(l)) && !teamRemoved.has(l.trim()) && !(f === 'lib/main.dart' && FIRST_TIME.test(l)))
         .filter(([l, n]) => slotEdits.includes(`${f}:${n}`) ? (edited.push(`\`${f}:${n}\` \`${l.trim().slice(0, 140)}\``), false) : true)
         .map(([l, n]) => `\`${f}:${n}\` (at ${base.slice(0, 7)}) \`${l.trim().slice(0, 140)}\` is gone`)
     }).slice(0, 40), edited.map((e) => `changed for the team's change in a screen of the app's own (--slot-edits): ${e}`))
@@ -625,7 +641,7 @@ const PLACES = [[/\bNativeAdsWidget\(/, 'native'], [/\b(?:Collapsible)?BannerWid
   [/(?<!Future<void>\s)\bonTapInter\(/, 'full-screen: interstitial on tap'], [/(?<!Future<void>\s)\bonTapRewardCall\(/, 'full-screen: rewarded'],
   [/\.showOpenAdIntroPremium\(/, 'full-screen: intro app open'], [/\.loadAppLifecycleReactor\(/, 'full-screen: app open on resume']]
 const SEEN = '.dart_tool/ads_seen.json'
-const CHECKER = 2 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
+const CHECKER = 3 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
 export function placements(root, { all = false } = {}) {
   const lib = path.join(root, 'lib'), files = walk(lib).filter((f) => f.endsWith('.dart')).sort(), code = new Map(files.map((f) => [f, blank(read(path.join(lib, f)))]))
   const everything = [...code.values()].join('\n')
@@ -669,10 +685,16 @@ export function monkeyProblems(text, wanted) {
   if (!/Monkey finished/.test(text)) bad.push(`monkey did not finish (${/aborted/i.test(text) ? 'aborted' : 'no end line'}): ${injected} of ${wanted} events`)
   return { bad, injected }
 }
+// the crash buffer lines of this app: its package name or one of its pids (a system process crashing on the emulator — Bluetooth
+// SIGABRT right after a boot, 2026-10-30 — is not the app's)
+export function crashMine(text, pkg, pids) {
+  const ls = text.split('\n'), own = (l) => l.includes(pkg) || pids.some((p) => p && new RegExp(`\\(\\s*${p}\\)|\\bpid:? ${p}\\b`).test(l))
+  return ls.filter(own).map((l) => l.trim())
+}
 function health(root, serial, pid0) {
   const a = appOf(root), bad = [], pkg = a.appId, adFiles = [...new Set(placements(root, { all: true }).map((p) => p.id.replace(/:\d+$/, '')))]
-  const crash = adbOut(serial, 'logcat', '-b', 'crash', '-d', '-v', 'brief').trim()
-  if (crash) bad.push(`crash buffer: ${crash.split('\n').slice(0, 4).join(' | ').slice(0, 300)}`)
+  const crash = crashMine(adbOut(serial, 'logcat', '-b', 'crash', '-d', '-v', 'brief'), pkg, [pid0])
+  if (crash.length) bad.push(`crash buffer: ${crash.slice(0, 4).join(' | ').slice(0, 300)}`)
   // pidof is empty for a moment while a process is forked and renamed: gone only when it stays empty over 3 reads
   let pid = ''
   for (let i = 0; i < 3 && !pid; i++) { pid = adbOut(serial, 'shell', 'pidof', pkg).trim(); if (!pid && i < 2) sleep(1) }
@@ -699,8 +721,10 @@ export function launch(root, serial, apk, { keepData = false, settle = 30, wait 
     sleep(3)
   }
   if (!pid) bad = [`the app never started within ${wait} s`]
+  // alive is not running: the IPTV release build hung on its launch screen (Dart threw before runApp) with its process up
+  else if (!new RegExp(`Displayed ${pkg.replace(/\./g, '\\.')}/`).test(adbOut(serial, 'logcat', '-d', '-v', 'brief'))) bad.push(`the app never drew its first screen (no "Displayed ${pkg}/" line from Android in ${settle} s): it hangs on its launch screen — read \`adb logcat -d | grep -E "E/flutter|AndroidRuntime"\``)
   const ok = !bad.length, all = readSeen(root)
-  all._cursor = deviceNow(serial); all._run = { pid, kind, at: new Date().toISOString() }; all._launch = { ...all._launch, [kind]: { ok, apk: path.basename(apk), pid, evidence: bad, libHash: libHash(root), checker: CHECKER, at: new Date().toISOString() } }
+  all._cursor = ''; /* the logs were cleared before the start: an ad shown during the launch (the splash ad) counts */ all._run = { pid, kind, at: new Date().toISOString() }; all._launch = { ...all._launch, [kind]: { ok, apk: path.basename(apk), pid, evidence: bad, libHash: libHash(root), checker: CHECKER, at: new Date().toISOString() } }
   writeSeen(root, all)
   return { ok, text: [`${ok ? 'PASS' : 'FAIL'} launch ${kind}: ${path.basename(apk)} started (pid ${pid || '-'}) and ran ${settle} s${keepData ? ' on the kept data' : ' on cleared data'}`, ...bad.map((b) => `  ${b}`)].join('\n') }
 }
@@ -938,7 +962,7 @@ function selftest() {
   assert.match(rd('lib/in_app_purchase/constant.dart'), /^const \w+ = "";$/m, 'the team\'s RevenueCat keys never copied')
   assert.ok(!/goog_|appl_/.test(rd('lib/in_app_purchase/constant.dart')))
   assert.deepEqual(first.todo.map((t) => t.split(/[: ]/)[0]), ['lib/in_app_purchase/constant.dart', 'the', 'lib/AdsUtils/dialog.dart', 'lib/in_app_purchase/initPlatformState.dart', 'lib/service/app_constant.dart',
-    ...SCREENS, 'Firebase'])
+    ...SCREENS, 'Firebase', 'lib/main.dart'])
   assert.match(rd('pubspec.yaml'), /^  google_mobile_ads: \^5\.3\.1$/m, 'the team\'s line'); assert.match(rd('pubspec.yaml'), /^  get: /m)
   assert.match(rd('android/app/src/main/kotlin/com/acme/my_app/MainActivity.kt'), /^package com\.acme\.my_app\r?$[\s\S]*registerNativeAdFactory[\s\S]*R\.id\.ad_media/m)
   for (const s of ['small', 'big', 'full']) assert.ok(fs.readFileSync(path.join(root, RES, `layout/native_admob_${s}.xml`)).equals(pptRead(`${RES}/layout/native_admob_${s}.xml`)), `the team's ${s} layout`)
@@ -959,7 +983,9 @@ function selftest() {
   const sk = tmp('ads-changes-'), ws = (f, t) => put(path.join(sk, f), t), rs = (f) => read(path.join(sk, f))
   fixture(ws); install(sk)
   ws('lib/home.dart', "class H {\n  build() {\n    // onTapInter(() => go());\n    keep();\n  }\n}\n")
+  ws('lib/main.dart', 'main() async {\n  AdsVariable.isFirstTimeVisited = prefs.getBool("isFirstTime");\n}\n')
   const g2 = gitIn(sk); g2('init', '-q'); g2('add', '-A'); g2('commit', '-q', '-m', 'base'); const b2 = g2('rev-parse', 'HEAD').trim()
+  install(sk); assert.match(rs('lib/main.dart'), /= prefs\.getBool\("isFirstTime"\) \?\? false;\n/, 'null on a fresh install skipped the splash ad')
   ws('lib/home.dart', "class H {\n  build() {\n    // onTapInter(() => go());\n  }\n}\n")
   ws('lib/ads/ads_splash_utils.dart', rs('lib/ads/ads_splash_utils.dart').replace('"my_app_v1"', '"other_v1"'))
   let c = changes(sk, b2)
@@ -994,6 +1020,10 @@ function selftest() {
   assert.equal(markerHit([L[2], L[1]], MARKS['full-screen: app open on resume'], ''), false, 'foreground comes first')
   assert.deepEqual(monkeyProblems('Events injected: 600\n// Monkey finished\n', 600), { bad: [], injected: 600 })
   assert.equal(monkeyProblems('Events injected: 41\n// CRASH: com.x (pid 9)\n** Monkey aborted due to error.\n', 600).bad.length, 2)
+  const bt = '--------- beginning of crash\nF/libc    (  898): Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 1075 (bt_stack_manage), pid 898 (droid.bluetooth)\nF/DEBUG   ( 5081): pid: 898, tid: 1075, name: bt_stack_manage  >>> com.android.bluetooth <<<\n'
+  assert.deepEqual(crashMine(bt, 'com.example.iptv_player', ['4960']), [], 'a system process crash on the device is not the app\'s')
+  assert.equal(crashMine(bt + 'E/AndroidRuntime( 4960): FATAL EXCEPTION: main\nE/AndroidRuntime( 4960): Process: com.example.iptv_player, PID: 4960\n', 'com.example.iptv_player', ['4960']).length, 2)
+  assert.equal(crashMine('F/DEBUG   ( 7001): pid: 4960, tid: 4960, name: ple.iptv_player  >>> com.example.iptv_player <<<\n', 'com.example.iptv_player', ['4960']).length, 1, 'a native crash of the app')
   out.push('crash detection ok')
 
   // placements / proof: every ad site, one not reachable (a function nothing calls) left out, the same full-screen call

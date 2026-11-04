@@ -30,7 +30,7 @@ It also missed the team's `resetAdIds()` after a purchase (`initPlatformState.da
 
 ## 1. Verified facts
 
-- **Ad unit ids** are Remote Config values under the app's parameter; `"11"` turns that ad off. `config.json` sits at the project root and is not an asset (the app never reads it). The installer writes it with every key the app's `lib/ads/ads_splash_utils.dart` reads (`mapValues1["…"]`): Google's test units for the ad ids, the code's own default for the rest (`apiCookie` `""`). This is the value to publish. Before a release the owner's ids replace the test units (`release-check.mjs` O6). Without `google-services.json` / `GoogleService-Info.plist`, Remote Config is never read, every id stays `"11"` and no ads show.
+- **Ad unit ids** are Remote Config values under the app's parameter; `"11"` turns that ad off. `config.json` sits at the project root and is not an asset (the app never reads it). The installer writes it with every key the app's `lib/ads/ads_splash_utils.dart` reads (`mapValues1["…"]`): Google's test units for the ad ids, the code's own default for the rest (`apiCookie` `""`). This is the value to publish. Before a release the owner's ids replace the test units (`release-check.mjs` O6), and the app's Facebook App ID and Client Token replace `facebookId` / `facebookToken` `"11"`: `"11"` does not turn Facebook off, the SDK starts with it and Facebook rejects every call (O8). Without `google-services.json` / `GoogleService-Info.plist`, Remote Config is never read, every id stays `"11"` and no ads show.
 - **The Remote Config parameter is the app's**: the one its code already reads (`remoteConfig.getValue("…")`; PPT: `ai_ppt_maker_v1`). An app with none gets `<pubspec name>_v1`.
 - **Native ads need the factories registered** before a native loads. The team's `MainActivity.kt` handles `"nativeChannel"` → `"setToast"` (called by `setupFbAdsId()`) and registers `smallNativeAds` / `bigNativeAds` / `fullNativeAds`. Its small factory binds `R.id.ad_media`, which the team's `native_admob_small.xml` has. A factory and its layouts always come together, from the team.
 - `native_admob_*.xml` need AppCompat + CardView. The team's `facebook-android-sdk:latest.release` brings both.
@@ -59,7 +59,7 @@ The installer applies the whole change when the app's files are the team's files
 3. **Apply each hunk as the team wrote it.**
    - Every `+` line goes in character for character, at the same place relative to the same code (in `initState`, under the same widget, inside the same callback): the same condition, value, size, widget, callback and order.
    - A name of the team's app that the app does not have is the only thing you replace: its screen classes (`HomeScreen`, `UpsellScreen`), list or controller (`homeController.topicList`), text arrays (`mTitle`), asset paths, fonts and button widget (`PressUnPressWidget`). Use the app's own name for the same thing and list each replacement in the report.
-   - A `-` line is removed only where the app has that same line, and the line is named with `--slot-edits <file:line at base>`. For example, `fs: 70.sp` becomes the team's ternary, and `return Scaffold(` stays as it is.
+   - A `-` line is removed only where the app has that same line, and the line is named with `--slot-edits <file:line at base>`. For example, `fs: 70.sp` becomes the team's ternary, and `return Scaffold(` stays as it is. Where the app's line is the same expression with its own value, the team's line goes in with the app's value in the place of the team's old one: the IPTV intro image `width: sw * 0.9` (the team's base: `sw`) became `(… nativeIntroBig != "11" …) ? sw * 0.68 : sw * 0.9`. Left as `sw * 0.9`, the big native pushed the intro title under the image (device, 2026-10-30).
    - A team file the app has nothing for (no intro, no settings) is named with `--no-screen <team file>` and listed.
 4. **Add no other line.** T3 fails on any ad call or condition the team's code does not have.
 
@@ -78,6 +78,7 @@ Keep each file's line endings: an edit that turns a CRLF file into LF shows as a
   - Android, or an app that is not on the team's base (Kotlin Gradle, Flutter's default MainActivity) → the team's own lines are added. These are the `APPLICATION_ID`, `AdActivity`, Facebook provider and `<queries>` lines, `INTERNET`, the Gradle `dependencies` (multidex, desugaring, sdp, facebook-android-sdk, the Firebase BoM, analytics, crashlytics), the Firebase plugins when `google-services.json` exists, `adsStyle` / `RatingBar` and the team's `MainActivity.kt`. The selftest checks each one is in the team's files.
 - **Helpers** `lib/ads` imports (`checkConnectivity`, `Shimmer…`, `loadingScreen`, `StoreConfig`, `appleApiKey`): the app's own file wherever it is, and the imports point there. Otherwise the team's file is copied: `in_app_purchase/constant.dart` with the team's RevenueCat keys emptied, because the app's own keys go there. An app with no `showLog` / `showToast` / `appText` gets a NOT DONE line.
 - **`config.json`** (section 1) and iOS (section 1).
+- **`lib/main.dart`**: `AdsVariable.isFirstTimeVisited = prefs.getBool("isFirstTime");` becomes `… ?? false;`, as in the team's `main.dart:16`. Left null on a fresh install, `loadInterSplash` (`isFirstTimeVisited != null`) skips the splash interstitial. If `main.dart` never sets it → NOT DONE: add the team's line before `runApp`.
 
 A second run changes nothing. NOT DONE lines are done by hand, then it runs again.
 
@@ -109,7 +110,7 @@ These are kept as the team has them, reported and not changed:
   - every line it adds to `lib/ads/` and to each team-base file the app has;
   - in the screens, and in team-base files the app does elsewhere, every ad call and condition it adds;
   - minus the files named with `--no-screen`, which are listed.
-- **T2** The app's own lines are all still there. The exceptions are lines the team's change itself replaces, and `--slot-edits` lines, which are listed for the audit.
+- **T2** The app's own lines are all still there. The exceptions are lines the team's change itself replaces, `lib/main.dart`'s `isFirstTimeVisited = prefs.getBool("isFirstTime");` (the installer adds `?? false`, section 3), and `--slot-edits` lines, which are listed for the audit.
 - **T3** No ad code of the app's own: every ad call and condition the work added is one the team's code has.
 - **R3** Every ad line the app had commented out is live, unless the team's build has it commented too.
 - **R4** The Remote Config parameter is the app's.

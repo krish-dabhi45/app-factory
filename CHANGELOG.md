@@ -2,7 +2,7 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
-## 0.48.0 — 2026-11-04 — not committed
+## 0.48.0 — 2026-11-04 — commit 98f9fe1
 
 **Continue from the work in the folder:** `/app-factory:app-dev-without-prd` and `/app-factory:build-app` now start from what an earlier run left in the project folder, where before the first stopped on any `PRD.md`, `CONTRACT.md`, `pubspec.yaml` or `source-app/` and the second rebuilt every group (its interface step rewrote the shared layer as placeholders). 6 files.
 

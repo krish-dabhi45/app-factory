@@ -2,7 +2,7 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
-## 0.52.0 — 2026-11-04 — not committed
+## 0.52.0 — 2026-11-04 — commit f4ef044
 
 **Questions only at the start:** `/app-factory:app-dev-without-prd` asks every question of the run in ONE stop, before the audit, and waits for the answers; after that nothing is asked — not after the audit, not by the PRD writer, not by build-app's contract, never during development. Every later gap gets the option closest to the evidence and the answers and is recorded (`source-app/answers.md`, `DECISIONS.md`, PRD.md Sources). Before: up to 5 stops (start, walk failed, gaps before PRD.md, a gap the report found, contract questions). 8 files besides this entry.
 
@@ -34,7 +34,7 @@ One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry 
 - A real run: no start stop shown from a workflow's `nextStep`, no fallback walk on a device, no `gaps → decisions` agent on real evidence.
 - `/app-factory:build-app` on its own still has a second stop before development when PRD.md has no Figma link and `noFigma` is not given (the Figma question comes before the contract questions).
 
-## 0.51.0 — 2026-11-04 — not committed
+## 0.51.0 — 2026-11-04 — commit f4ef044 (one commit with 0.52.0)
 
 **Re-audit, then continue — never restart:** fired in a folder that already has the source evidence, PRD.md, CONTRACT.md and code, `/app-factory:app-dev-without-prd` re-audits PRD.md (only what is missing or fails the current check), `/app-factory:build-app` re-audits CONTRACT.md against PRD.md, and the build continues from the code: criteria whose tests pass are kept, changed and added ones are built, a removed one's own code is deleted. 9 files besides this entry.
 

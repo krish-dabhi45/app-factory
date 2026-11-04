@@ -2,6 +2,70 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.52.0 — 2026-11-04 — not committed
+
+**Questions only at the start:** `/app-factory:app-dev-without-prd` asks every question of the run in ONE stop, before the audit, and waits for the answers; after that nothing is asked — not after the audit, not by the PRD writer, not by build-app's contract, never during development. Every later gap gets the option closest to the evidence and the answers and is recorded (`source-app/answers.md`, `DECISIONS.md`, PRD.md Sources). Before: up to 5 stops (start, walk failed, gaps before PRD.md, a gap the report found, contract questions). 8 files besides this entry.
+
+### Changed
+
+- `workflows/app-dev-without-prd.js`:
+  - the start stop has a new question `walkfallback` (header "If walk fails"), built in the workflow: the devices that apply other than the walk's own first choice (order phone, Play on emulator, plugin emulator) and "Go on without the walk", the first recommended. It is asked with `link`, `apk`, `walk` and `name` (the `name` question offers "Keep <name>" first when PRD.md exists; "Keep " is dropped from the answer).
+  - a walk that reaches no screen or returns nothing → a second walk on the `walkfallback` device in the same run (`audit: walk (<mode>)`), no question; both fail, or the answer was no walk → no walk, logged, and the Decide step records "Go on without the walk" as a decision. The `walkfail-<n>` question is removed; `walk` became `walk(mode)` with `deviceFor(mode)`.
+  - phase **Questions** → **Decide**: agent `gaps → decisions` decides each gap (id `gap-<n>`, the first option closest to the evidence and the answers) and records it: a "## Decided without asking" section in `source-app/answers.md` ("### gap-<n> · <question>", "Decided:", "Why:"), and DECISIONS.md through `decisions --questions <file> --add` and `--answers` with `by: "decided"`. It never stops the run.
+  - Report: no `questions` in its result any more; a late gap is decided and recorded the same way and cited `[decided: gap-<n>]`; Sources lists every decision and every walk tried. `--no-walk` whenever no screen was walked (chosen, impossible, or both walks failed).
+  - build-app is started with `"decideAll":true` (the last `nextStep` and both resume paths).
+  - `meta` description and `whenToUse`, phase titles, and the shared prompt: "the Source step's questions, asked once at the start, are the only ones of this run".
+- `workflows/build-app.js`: `DECIDE_ALL` (`"decideAll":true`): the contract step and the contract re-audit set every question `ask = false`, record it and its first option as answered `by: "decided"`, and return no question; the workflow also drops any question an agent returns in that mode (logged "not asked; their first options apply"). build-app on its own still asks every contract question in its one stop before development. The Ads phase prompt: never ask the user; the project is a git repository, so ads-implementation step 1's no-git question never applies.
+- `scripts/pipeline.mjs` `decisions`: answers `by: "decided"` → "decided without asking (questions are asked only at the start) → the option closest to the evidence and the answers"; counted in DECISIONS.md's head and the command's output (`decided <n>`). Selftest: Q8 recorded as decided.
+- `scripts/source-app.mjs`: `check` accepts `[decided: gap-<n>]` as a source when `source-app/answers.md` has "### gap-<n> ·" (else "cites gap-<n>, which source-app/answers.md does not record"); `ASSUMED` / `NOT OBSERVED` allowed next to `[user]` or `[decided: gap-<n>]`. `status`: "Decided: Go on without the walk" counts like the answer. Selftest: a recorded decision passes, an unrecorded one fails, the no-walk decision removes the no-walked-screen problem.
+- `scripts/simulate-without-prd.mjs`: rewritten for the one stop — 10 states (the stop with `walkfallback`; answered → no other stop; fallback walk in the same run; both walks fail; a dead walk agent; fallback "no walk"; no walk chosen; PRD ready + contract; PRD ready; Repair Coach), 32 `ok` lines; every state checks that no question other than the start ones is returned.
+- `scripts/simulate.mjs`: 2 scenarios — `decideAll` contract (no question reaches the user even when the agent returns one) and `decideAll` re-audit. 111 `ok` lines.
+- `GUIDE.md` section 4a (the one stop, `walkfallback`, Decide, the `[decided: gap-<n>]` tag, `decideAll`), the build table's step 2 and the contract re-audit paragraph. `README.md`: the no-PRD row.
+- `.claude-plugin/plugin.json`: version 0.51.0 → 0.52.0.
+
+### Checked (all passed)
+
+- `node scripts/simulate.mjs`: exit 0, no `FAIL` line. `node scripts/simulate-without-prd.mjs`: exit 0, `all ok`.
+- `node scripts/source-app.mjs selftest`, `node scripts/pipeline.mjs selftest`, `node scripts/notify.mjs selftest`, `node scripts/configure.mjs selftest`, `node scripts/self-configure.mjs selftest`, `node scripts/release-check.mjs selftest`.
+- `grep` over `agents/` and `skills/`: the tester agent and the QA skill already say never to ask during a run; ads-implementation step 1's no-git question is covered by the Ads phase prompt.
+
+### Not checked
+
+- A real run: no start stop shown from a workflow's `nextStep`, no fallback walk on a device, no `gaps → decisions` agent on real evidence.
+- `/app-factory:build-app` on its own still has a second stop before development when PRD.md has no Figma link and `noFigma` is not given (the Figma question comes before the contract questions).
+
+## 0.51.0 — 2026-11-04 — not committed
+
+**Re-audit, then continue — never restart:** fired in a folder that already has the source evidence, PRD.md, CONTRACT.md and code, `/app-factory:app-dev-without-prd` re-audits PRD.md (only what is missing or fails the current check), `/app-factory:build-app` re-audits CONTRACT.md against PRD.md, and the build continues from the code: criteria whose tests pass are kept, changed and added ones are built, a removed one's own code is deleted. 9 files besides this entry.
+
+### Changed
+
+- `workflows/build-app.js`, contract stage with CONTRACT.md present (both commands; before: "left unchanged — run again with stage build", or with stage `all` "use it unchanged"): a **re-audit** — PRD requirement without a criterion → new criterion, next AC number ("added"); a criterion whose input, output, text, number or limit PRD.md now states differently → rewritten under the same AC id ("changed"); a criterion with no PRD line, question id or ASSUMED mark → section "Removed criteria" ("removed"), registered `blocked "removed by the contract re-audit"` so `coverage` does not ask for its test; a matching criterion is not touched; ads placements go into the last group `ads`; new gaps → questions with the next Q ids, recorded with `decisions --questions <file> --add`. Returns `reaudit {changed, added, removed}`; the contract stage logs the three lists and passes them to the build stage in its args (`"reaudit":{"changed":[<ids>],"added":[<ids>],"removed":[<ids>]}`).
+- `workflows/build-app.js`, build stage: `REAUDIT` (args, or this run's own with stage `all`); a changed or added criterion is not `done` even when an old test named after it passes, and its group's prompt says to make its code and tests match the new line; the first integrator / gate round deletes the code, screens and tests that serve only a removed criterion. The existing work step ignores the "Removed criteria" section. Answers: each one applied once — an id already in `.pipeline/answers.json` is skipped (before: all skipped once that file existed, so a re-audit's answers were never applied).
+- `scripts/pipeline.mjs` `decisions`: `--answers` adds to the recorded answers (a later answer with the same id replaces the earlier one); `--questions <file> --add` adds to the recorded questions; without `--add` questions still replace. Selftest: Q7 added and answered with Q1–Q6 and their answers kept.
+- `scripts/source-app.mjs` `status`: `staticMissing` — what a `static.md` from before 0.49.0 lacks: `layouts` (no `## Layouts`), `data` (no `## Data in the code`), `hashes` (no `source-app/res-hashes.txt`). On Repair Coach: `["layouts","data","hashes"]`, `prdProblems` 137.
+- `workflows/app-dev-without-prd.js`:
+  - the resume decision moved from the Source agent into the workflow: PRD.md with 0 problems and no `staticMissing` part that the APK in the folder can add → no audit, `nextStep` = `/app-factory:build-app {"noFigma":true}` (its contract stage re-audits an existing CONTRACT.md; before: `{"stage":"build"}`, which used the contract unchanged); otherwise the PRD is re-audited (log "re-auditing PRD.md: <n> check problem(s); static.md lacks <parts>"), CONTRACT.md and `lib/` kept.
+  - new agent `audit: APK files (missing parts)`: with `staticMissing` and an APK, only steps 8–10 (layouts, code data, hashes — now one shared text, `STATIC_EXTRA`) are done and appended to `static.md`; no other line of it changes.
+  - no `walk` question when `walk.md` already has a screen; with PRD.md present, the `name` question's first option is "Keep <the PRD's name>".
+  - the last `nextStep` says build-app re-audits the CONTRACT.md already there and continues the code in `lib/`.
+- `scripts/simulate.mjs`: 2 scenarios — CONTRACT.md present → re-audit prompt, the lists logged and passed on, no "left unchanged"; build after a re-audit → AC1 (changed, its old test passing) rebuilt, AC2 kept, AC9's code deleted by the integrator, answers applied one by one. 109 `ok` lines.
+- `scripts/simulate-without-prd.mjs` (68 lines): scenario 8 now expects `{"noFigma":true}` and the re-audit; new scenario 11 (Repair Coach's `status`: contract, 127 `.dart` files, 137 PRD problems, `staticMissing` all three, no walk chosen) → `source, audit: APK files (missing parts), gaps, report` only. 11 states, 30 `ok` lines.
+- `GUIDE.md` section 4a: the earlier-work table (PRD ready / PRD re-audit / evidence only) and a "Contract re-audit" paragraph; the existing work paragraph names the rebuilt and deleted criteria. `README.md`: build-app step 1 and the no-PRD row.
+- `.claude-plugin/plugin.json`: version 0.50.0 → 0.51.0.
+
+### Checked (all passed)
+
+- `node scripts/simulate.mjs`: exit 0, no `FAIL` line. `node scripts/simulate-without-prd.mjs`: exit 0, `all ok`.
+- `node scripts/source-app.mjs selftest`, `node scripts/pipeline.mjs selftest`, `node scripts/notify.mjs selftest`, `node scripts/configure.mjs selftest`, `node scripts/self-configure.mjs selftest`, `node scripts/release-check.mjs selftest`.
+- `node scripts/source-app.mjs status "/Users/mach/testing/repair coach"` → `"prdProblems":137,"staticMissing":["layouts","data","hashes"],"contract":true,"dartFiles":127`.
+
+### Not checked
+
+- A real re-audit: no agent compared a real CONTRACT.md with a real PRD.md, and no build ran with a `reaudit` list.
+- A build stopped half-way after a re-audit and continued later without the `reaudit` args: a changed criterion whose old test still passes would then count as done.
+- The SwiftUI stack: no existing work step, so every group is built (unchanged from 0.48.0).
+
 ## 0.50.0 — 2026-11-04 — commit 5381789
 
 **Ads fixes found on the IPTV app (2026-10-30 to 2026-11-03):** the splash interstitial on a fresh install, a build on Gradle 9, `config.json` keys added after the wiring, a release build that hangs on its launch screen, a system crash read as the app's, and Facebook's `"11"`. These are the uncommitted ads changes listed under "Not in this version" in 0.47.0, 0.48.0 and 0.49.0. 7 files besides this entry.

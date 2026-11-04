@@ -17,8 +17,9 @@
 // Evidence files (written by the audit agents): source-app/store.md (always), static.md and walk.md (with an APK).
 // Each seen item gets an id on its own line — "## S07 · <screen>" or "- F03 · <claim>" (S screen, F store/web feature,
 // D APK dependency or capability, L APK layout file, P store screenshot). PRD.md must cite every id, and every requirement
-// line in it must carry a source tag: [walk: S07], [store: F03|P02|<url>], [static: D04|L02], [web: <url>] or [user] (an
-// answer in source-app/answers.md). ASSUMED / NOT OBSERVED only next to [user]: a gap no source shows is asked, not guessed.
+// line in it must carry a source tag: [walk: S07], [store: F03|P02|<url>], [static: D04|L02], [web: <url>], [user] (an
+// answer in source-app/answers.md) or [decided: gap-3] (a gap decided after the one question stop at the start, recorded
+// in answers.md as "### gap-3 · <question>"). ASSUMED / NOT OBSERVED only next to [user] or [decided: gap-<n>] — never a bare guess.
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -30,7 +31,7 @@ import { decode, encode, blank } from './png.mjs'
 export const SECTIONS = ['App', 'Platforms', 'Screens', 'Navigation', 'Fields', 'Features', 'Data and backend', 'Monetisation',
   'Permissions and notifications', 'Settings', 'Theme', 'Not copied', 'Coverage', 'Sources']
 const NO_TAG = new Set(['Theme', 'Not copied', 'Sources']) // Theme is checked through theme.json; the other two list, not require
-const TAG = /\[(walk|store|static|web): [^\]]+\]|\[user\]/
+const TAG = /\[(walk|store|static|web): [^\]]+\]|\[user\]|\[decided: gap-\d+\]/
 const GUESS = /\bASSUMED\b|\bNOT OBSERVED\b/
 const EVIDENCE = ['store.md', 'static.md', 'walk.md', 'answers.md']
 // what a quote is compared with: one space for any run of whitespace or a literal \n (static.md keeps resource strings escaped)
@@ -103,8 +104,9 @@ export function check(root, { apk = false, noWalk = false } = {}) {
       if (NO_TAG.has(p.name)) return
       const row = /^\s*\|/.test(line) && !/^\s*\|[\s|:-]+\|\s*$/.test(line) && !/^\s*\|[\s|:-]+\|\s*$/.test(lines[i + 1] || '') // a table row, not its header or separator
       if (!(/^\s*([-*]|\d+\.)\s+\S/.test(line) || row)) return
-      if (!TAG.test(line)) bad.push(`${at} — no source tag ([walk: S..], [store: ..], [static: D..|L..], [web: <url>] or [user])`)
-      else if (GUESS.test(line) && !/\[user\]/.test(line)) bad.push(`${at} — ${line.match(GUESS)[0]} without [user]: no source shows it, so it is a question for the user (before PRD.md), not a guess`)
+      if (!TAG.test(line)) bad.push(`${at} — no source tag ([walk: S..], [store: ..], [static: D..|L..], [web: <url>], [user] or [decided: gap-<n>])`)
+      else if (GUESS.test(line) && !/\[user\]|\[decided: gap-\d+\]/.test(line)) bad.push(`${at} — ${line.match(GUESS)[0]} without [user] or [decided: gap-<n>]: decide it (the option closest to the evidence), record it in source-app/answers.md and DECISIONS.md, and cite it — never a bare guess`)
+      for (const [, g] of line.matchAll(/\[decided: (gap-\d+)\]/g)) if (!new RegExp(`^### ${g} ·`, 'm').test(ev)) bad.push(`${at} — cites ${g}, which source-app/answers.md does not record ("### ${g} · <question>")`)
       // a text quoted or a name in backticks must be in the evidence as written (the brand-replaced texts hold the new name)
       // (pairs taken in order, then the short ones dropped — a length limit inside the pattern would pair a closing quote
       // with the next opening one; a quote with a <placeholder> describes a pattern, not a text)
@@ -141,12 +143,15 @@ export function status(root) {
   const f = (p) => path.join(root, p), has = (p) => fs.existsSync(f(p))
   const ids = (p, k) => (has(p) ? fs.readFileSync(f(p), 'utf8').split('\n').filter((l) => (l.match(ID_LINE) || [])[1]?.startsWith(k)).length : 0)
   const apk = has('source-app/static.md')
-  // the user chose to go on without the walk (app-dev-without-prd writes the answers there)
-  const noWalk = has('source-app/answers.md') && fs.readFileSync(f('source-app/answers.md'), 'utf8').includes('Answer: Go on without the walk')
+  // the user chose to go on without the walk, or it was decided after every walk failed (app-dev-without-prd records both there)
+  const noWalk = has('source-app/answers.md') && /^(Answer|Decided): Go on without the walk/m.test(fs.readFileSync(f('source-app/answers.md'), 'utf8'))
   const dart = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? dart(path.join(d, e.name)) : e.name.endsWith('.dart') ? 1 : 0), 0) : 0)
+  // parts a static.md from an older version lacks (0.49.0 added layouts, code data and the file hashes)
+  const st = apk ? fs.readFileSync(f('source-app/static.md'), 'utf8') : ''
+  const staticMissing = apk ? [[/^## Layouts/m, 'layouts'], [/^## Data in the code/m, 'data']].filter(([r]) => !r.test(st)).map(([, n]) => n).concat(has('source-app/res-hashes.txt') ? [] : ['hashes']) : []
   return {
     sourceApp: has('source-app'), store: ids('source-app/store.md', 'F'), static: ids('source-app/static.md', 'D'), walk: ids('source-app/walk.md', 'S'),
-    prd: has('PRD.md'), prdProblems: has('PRD.md') ? check(root, { apk, noWalk }).length : null, contract: has('CONTRACT.md'), app: APP_FILES.some(has) || fs.readdirSync(root).some((e) => e.endsWith('.xcodeproj')), dartFiles: dart(f('lib')),
+    prd: has('PRD.md'), prdProblems: has('PRD.md') ? check(root, { apk, noWalk }).length : null, staticMissing, contract: has('CONTRACT.md'), app: APP_FILES.some(has) || fs.readdirSync(root).some((e) => e.endsWith('.xcodeproj')), dartFiles: dart(f('lib')),
   }
 }
 
@@ -235,7 +240,12 @@ function selftest() {
   w('source-app/answers.md', '- name: Nova\n')
   w('PRD.md', body('\n- Limit 500 characters, ASSUMED [walk: S01]\n- Limit 300 characters, NOT OBSERVED, asked [user] [walk: S01]'))
   const g = check(tmp, { apk: true })
-  assert.ok(g.some((x) => /500 characters.*ASSUMED without \[user\]/.test(x)) && !g.some((x) => /300 characters/.test(x)), 'a guess without the user\'s answer is caught; with [user] it passes')
+  assert.ok(g.some((x) => /500 characters.*ASSUMED without \[user\] or \[decided/.test(x)) && !g.some((x) => /300 characters/.test(x)), 'a guess without the user\'s answer is caught; with [user] it passes')
+  w('source-app/answers.md', '- name: Nova\n## Decided without asking\n### gap-1 · Max length of the note?\nDecided: 500 characters\n')
+  w('PRD.md', body('\n- Note: up to 500 characters, NOT OBSERVED [decided: gap-1]\n- Title up to 40 characters [decided: gap-2]'))
+  const d = check(tmp, { apk: true })
+  assert.ok(!d.some((x) => /500 characters/.test(x)) && d.some((x) => /cites gap-2, which source-app\/answers\.md does not record/.test(x)), 'a recorded decision is a source; an unrecorded one is caught')
+  w('source-app/answers.md', '- name: Nova\n')
   w('PRD.md', body('\n- Button "Export to PDF" and `export_btn` [store: F01]\n- Title "Nova home", see "Features" [walk: S01]'))
   const q2 = check(tmp, { apk: true })
   assert.ok(q2.some((x) => /"export_btn" is not in source-app/.test(x)) && !q2.some((x) => /Export to PDF"? is not/.test(x)) && !q2.some((x) => /Nova home|"Features" is not/.test(x)), 'an invented name is caught; an evidence text, the new name and a PRD heading pass')
@@ -252,9 +262,13 @@ function selftest() {
   assert.ok(b3.some((x) => /too close/.test(x)), 'a primary of the same hue as the source is caught')
   assert.ok(b3.some((x) => /onSurface on surface/.test(x)), 'low contrast is caught')
   w('source-app/theme.json', JSON.stringify(theme))
-  assert.deepEqual(status(tmp), { sourceApp: true, store: 1, static: 1, walk: 1, prd: true, prdProblems: 0, contract: false, app: false, dartFiles: 0 }, 'status: the evidence and a ready PRD are found')
+  assert.deepEqual(status(tmp), { sourceApp: true, store: 1, static: 1, walk: 1, prd: true, prdProblems: 0, staticMissing: ['layouts', 'data', 'hashes'], contract: false, app: false, dartFiles: 0 }, 'status: the evidence and a ready PRD are found; an older static.md lacks layouts, code data and hashes')
   w('source-app/walk.md', '# Walk\nNOT OBSERVED: INSTALL_FAILED_MISSING_SPLIT\n')
   assert.equal(status(tmp).walk, 0, 'status: a walk with no screen counts as not done')
+  const noScreen = status(tmp).prdProblems
+  w('source-app/answers.md', '## Decided without asking\n### gap-1 · The walk reached no screen on the devices tried: how is PRD.md written?\nDecided: Go on without the walk — screens from the layouts\n')
+  assert.equal(status(tmp).prdProblems, noScreen - 1, 'status: a recorded "go on without the walk" decision removes the no-walked-screen problem, like the user\'s answer')
+  fs.rmSync(path.join(tmp, 'source-app', 'answers.md'))
   for (const f of ['settings.gradle.kts', 'Demo.xcodeproj']) { fs.mkdirSync(path.join(tmp, 'x'), { recursive: true }); fs.writeFileSync(path.join(tmp, 'x', f), ''); assert.equal(status(path.join(tmp, 'x')).app, true, `status: ${f} is an app project`); fs.rmSync(path.join(tmp, 'x'), { recursive: true }) }
   fs.rmSync(path.join(tmp, 'source-app', 'walk.md'))
   assert.ok(!check(tmp).some((x) => /walk\.md missing/.test(x)) && check(tmp, { apk: true }).some((x) => /walk\.md missing/.test(x)), 'walk.md is required only with an APK')

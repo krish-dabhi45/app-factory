@@ -44,7 +44,8 @@
 //   maestro-install       — the plugin's own Maestro 2.11.0 (~/.app-factory/maestro-2.11.0, SHA-256 checked) for android-screen.mjs
 //   design-check              — fails unless every referenced screen was compared, every one of its components checked and
 //                               present (or excluded by the contract), and no DESIGN finding is open
-//   decisions [--questions <json file>] [--answers <json file>] [--root <dir>]
+//   decisions [--questions <json file> [--add]] [--answers <json file>] [--root <dir>] — answers add to the recorded ones;
+//                         --add: the questions add to the recorded ones (a contract re-audit), else they replace them
 //                         — records the contract's questions (asked or not) and the chat's answers in .pipeline/, then writes
 //                           DECISIONS.md: per question its options, the one selected and by whom
 //   stray [--root <dir>]      — fails if a file was added since the baseline commit outside the app-factory allowlist
@@ -610,6 +611,9 @@ function decisions(root, a = []) {
     if (!from) continue
     const data = JSON.parse(fs.readFileSync(from, 'utf8')) // must be valid JSON: a list
     if (!Array.isArray(data)) throw new Error(`${flag} ${from}: not a JSON list`)
+    // answers always add to the ones recorded (a re-audit asks more later); questions add with --add (a contract re-audit)
+    const merge = (flag === '--answers' || a.includes('--add')) && fs.existsSync(to)
+    if (merge) { const old = JSON.parse(fs.readFileSync(to, 'utf8')), ids = new Set(data.map((x) => x.id)); data.unshift(...old.filter((x) => !ids.has(x.id))) }
     if (flag === '--questions') {
       // the chat shows these as they are: check the format here, so no agent writes its own checker
       const bad = [], ids = new Set()
@@ -633,8 +637,8 @@ function decisions(root, a = []) {
   const all = JSON.parse(fs.readFileSync(qf, 'utf8')), answered = fs.existsSync(af)
   const qs = all
   const ans = new Map((answered ? JSON.parse(fs.readFileSync(af, 'utf8')) : []).map((x) => [x.id, x]))
-  const BY = { user: 'the user chose it', timeout: 'no reply within 5 minutes → recommended option', unattended: 'unattended run → recommended option' }
-  const count = { user: 0, timeout: 0, unattended: 0, notAsked: 0, waiting: 0, skipped: 0 }
+  const BY = { user: 'the user chose it', decided: 'decided without asking (questions are asked only at the start) → the option closest to the evidence and the answers', timeout: 'no reply within 5 minutes → recommended option', unattended: 'unattended run → recommended option' }
+  const count = { user: 0, decided: 0, timeout: 0, unattended: 0, notAsked: 0, waiting: 0, skipped: 0 }
   const body = qs.map((q) => {
     const rec = q.options[0].label.replace(/ \(Recommended\)$/, ''), a = ans.get(q.id)
     let sel = rec, by
@@ -646,9 +650,9 @@ function decisions(root, a = []) {
     return `## ${q.id} · ${q.header} (${q.area})${q.ask ? ' · asked' : ''}\n${q.question}\nAffects: ${q.affects}\n${q.why ? `Why ${q.ask ? 'asked' : 'not asked'}: ${q.why}\n` : ''}\nOptions:\n${opts}\n\n**Selected: ${sel}** — ${by}\n`
   })
   const asked = qs.filter((q) => q.ask).length
-  const head = `# Decisions\n\n${qs.length} question(s): ${asked} asked, ${qs.length - asked} not asked (recommended option used). Chosen by the user: ${count.user}; skipped in the user's reply: ${count.skipped};${count.timeout ? ` no reply in 5 minutes: ${count.timeout};` : ''} unattended: ${count.unattended}; waiting: ${count.waiting}.\nCONTRACT.md lines tagged with a question's id (e.g. "(Q3)") follow the selected option.\n`
+  const head = `# Decisions\n\n${qs.length} question(s): ${asked} asked, ${qs.length - asked} not asked (recommended option used). Chosen by the user: ${count.user}; decided without asking: ${count.decided}; skipped in the user's reply: ${count.skipped};${count.timeout ? ` no reply in 5 minutes: ${count.timeout};` : ''} unattended: ${count.unattended}; waiting: ${count.waiting}.\nCONTRACT.md lines tagged with a question's id (e.g. "(Q3)") follow the selected option.\n`
   fs.writeFileSync(path.join(root, 'DECISIONS.md'), [head, ...body].join('\n'))
-  return `DECISIONS.md: ${qs.length} question(s), ${asked} asked — user ${count.user}, skipped ${count.skipped}, no reply ${count.timeout}, unattended ${count.unattended}, waiting ${count.waiting}, not asked ${count.notAsked}`
+  return `DECISIONS.md: ${qs.length} question(s), ${asked} asked — user ${count.user}, decided ${count.decided}, skipped ${count.skipped}, no reply ${count.timeout}, unattended ${count.unattended}, waiting ${count.waiting}, not asked ${count.notAsked}`
 }
 
 function stray(root) {
@@ -1548,14 +1552,20 @@ function selftest() {
   assert.throws(() => decisions(dq), /no questions recorded/)
   fs.writeFileSync(path.join(dq, 'bad.json'), JSON.stringify([{ ...q('Q1', true), header: 'Thirteen char' }, { ...q('Q1', false), options: [{ label: 'Yes', description: 'a' }, { label: 'No', description: 'b' }] }]))
   assert.throws(() => decisions(dq, ['--questions', path.join(dq, 'bad.json')]), (e) => /Q1: header "Thirteen char" must be 1–12/.test(e.message) && /Q1: missing or repeated id/.test(e.message) && /first option's label must end with " \(Recommended\)"/.test(e.message))
-  assert.match(decisions(dq, ['--questions', path.join(dq, 'q.json')]), /6 question\(s\), 5 asked — user 0, skipped 0, no reply 0, unattended 0, waiting 5, not asked 1/) // no cap: every "ask" is asked
+  assert.match(decisions(dq, ['--questions', path.join(dq, 'q.json')]), /6 question\(s\), 5 asked — user 0, decided 0, skipped 0, no reply 0, unattended 0, waiting 5, not asked 1/) // no cap: every "ask" is asked
   fs.writeFileSync(path.join(dq, 'a.json'), JSON.stringify([{ id: 'Q1', answer: 'No', isDefault: false, by: 'user' }, { id: 'Q2', answer: 'Yes (Recommended)', isDefault: true, by: 'timeout' }]))
-  assert.match(decisions(dq, ['--answers', path.join(dq, 'a.json')]), /user 1, skipped 3, no reply 1, unattended 0, waiting 0, not asked 1/) // Q2: an old timeout record; Q4–Q6 skipped → recommended
+  assert.match(decisions(dq, ['--answers', path.join(dq, 'a.json')]), /user 1, decided 0, skipped 3, no reply 1, unattended 0, waiting 0, not asked 1/) // Q2: an old timeout record; Q4–Q6 skipped → recommended
   const dmd = fs.readFileSync(path.join(dq, 'DECISIONS.md'), 'utf8')
   assert.match(dmd, /## Q1 · Q1 \(logic\) · asked[\s\S]*\*\*Selected: No\*\* — the user chose it/)
   assert.match(dmd, /## Q2[\s\S]*\*\*Selected: Yes\*\* — no reply within 5 minutes/)
   assert.match(dmd, /## Q3 · Q3 \(logic\)\n[\s\S]*Why not asked: a safe default[\s\S]*\*\*Selected: Yes\*\* — not asked/)
   assert.match(dmd, /## Q4[\s\S]*asked, not answered → recommended option/)
+  // a contract re-audit: new questions add to the recorded ones (--add), later answers add to the earlier ones
+  fs.writeFileSync(path.join(dq, 'q2.json'), JSON.stringify([q('Q7', true)])); fs.writeFileSync(path.join(dq, 'a2.json'), JSON.stringify([{ id: 'Q7', answer: 'No', isDefault: false, by: 'user' }]))
+  assert.match(decisions(dq, ['--questions', path.join(dq, 'q2.json'), '--add', '--answers', path.join(dq, 'a2.json')]), /7 question\(s\), 6 asked — user 2, decided 0, skipped 3, no reply 1/, 'Q1–Q6 and their answers kept, Q7 added and answered')
+  fs.writeFileSync(path.join(dq, 'q3.json'), JSON.stringify([q('Q8', false)])); fs.writeFileSync(path.join(dq, 'a3.json'), JSON.stringify([{ id: 'Q8', answer: 'Yes (Recommended)', isDefault: true, by: 'decided' }]))
+  assert.match(decisions(dq, ['--questions', path.join(dq, 'q3.json'), '--add', '--answers', path.join(dq, 'a3.json')]), /8 question\(s\), 6 asked — user 2, decided 1/)
+  assert.match(fs.readFileSync(path.join(dq, 'DECISIONS.md'), 'utf8'), /## Q8[\s\S]*\*\*Selected: Yes\*\* — decided without asking/, 'a gap decided after the start is recorded as decided')
   if (oldDir === undefined) delete process.env.PIPELINE_DIR; else process.env.PIPELINE_DIR = oldDir
 
   // stray: only the allowlist may be added after the baseline; the user's earlier files never count

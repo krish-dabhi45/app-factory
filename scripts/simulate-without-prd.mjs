@@ -1,10 +1,10 @@
-// Runs workflows/app-dev-without-prd.js with fake agents (no Claude, no devices): which steps run, which questions stop
-// the run, and what each prompt and nextStep says, for each folder state below. Run after every change to the workflow:
+// Runs workflows/app-dev-without-prd.js with fake agents (no Claude, no devices): which steps run, where the one question stop
+// is, and what each prompt and nextStep says, for each folder state below. Run after every change to the workflow:
 // node scripts/simulate-without-prd.mjs
 import fs from 'node:fs'
 const src = fs.readFileSync(new URL('../workflows/app-dev-without-prd.js', import.meta.url), 'utf8').replace(/^export const meta = /m, 'const meta = ')
 const AF = Object.getPrototypeOf(async () => {}).constructor
-const have = (o) => ({ store: 0, static: 0, walk: 0, prd: false, prdProblems: null, contract: false, app: false, dartFiles: 0, ...o })
+const have = (o) => ({ store: 0, static: 0, walk: 0, prd: false, prdProblems: null, staticMissing: [], contract: false, app: false, dartFiles: 0, ...o })
 const q = (id, labels) => ({ id, header: id, question: `${id}?`, options: labels.map((l, i) => ({ label: i ? l : `${l} (Recommended)`, description: 'd' })), why: 'w' })
 let fails = 0
 const ok = (c, m) => { console.log(`   ${c ? 'ok' : 'FAIL'}: ${m}`); if (!c) fails++ }
@@ -19,45 +19,57 @@ async function sim(name, args, over = {}) {
   return { calls, prompts, res, logs }
 }
 const L = 'https://play.google.com/store/apps/details?id=com.x'
-const baseSrc = { ok: true, resume: 'audit', have: have({}), projectDir: '/p', scratch: '/p.source', link: L, androidPackage: 'com.x', apks: ['/p.source/apk/unzipped-base.apk'], apkFrom: 'folder', unzipped: true, splitsMissing: true, pairip: true, installable: false, phone: 'ZD22', phoneModel: 'moto e22s', questions: [q('apk', ['Pull from my phone', "I'll add the APK set", 'Go on without the walk']), q('walk', ['My phone', 'Play on emulator']), q('name', ['Mendo', 'Fixa', 'Rivo'])] }
-const fine = { 'audit: store + web': { title: 't', features: 3, screenshots: 2, pages: 1 }, 'audit: APK files': { framework: 'native', dependencies: 9, ownScreens: 4, layouts: 40, dataTables: 2 }, 'audit: walk': { walked: 12, fields: 3, outputs: 2, navigation: 20, notReached: [] }, gaps: { questions: [] }, 'report: PRD + theme': { ready: true, screens: 12, features: 5, fields: 3, assumed: 0, notObserved: 0, check: 'audit ready' } }
+const baseSrc = { ok: true, have: have({}), projectDir: '/p', scratch: '/p.source', link: L, androidPackage: 'com.x', apks: ['/p.source/apk/unzipped-base.apk'], apkFrom: 'folder', unzipped: true, splitsMissing: true, pairip: true, installable: false, phone: 'ZD22', phoneModel: 'moto e22s', questions: [q('apk', ['Pull from my phone', "I'll add the APK set", 'Go on without the walk']), q('walk', ['My phone', 'Play on emulator']), q('name', ['Mendo', 'Fixa', 'Rivo'])] }
+const fine = { 'audit: store + web': { title: 't', features: 3, screenshots: 2, pages: 1 }, 'audit: APK files': { framework: 'native', dependencies: 9, ownScreens: 4, layouts: 40, dataTables: 2 }, 'audit: walk': { walked: 12, fields: 3, outputs: 2, navigation: 20, notReached: [] }, 'gaps → decisions': { decided: 2, ids: ['gap-1', 'gap-2'] }, 'report: PRD + theme': { ready: true, screens: 12, features: 5, fields: 3, assumed: 0, notObserved: 0, check: 'audit ready' } }
 
-let x = await sim('1 · start: unzipped APK, splits missing, a phone has the app', L, { source: baseSrc })
-ok(x.res.stage === 'questions' && x.res.questions.map((y) => y.id).join() === 'apk,walk,name' && x.calls.join() === 'source', 'stops before the audit with the apk, walk and name questions')
-ok(/AskUserQuestion tool, up to 4 questions per call/.test(x.res.nextStep) && /never start a timer/.test(x.res.nextStep) && /app-factory:app-dev-without-prd again/.test(x.res.nextStep) && /"answers":\[\]/.test(x.res.nextStep), 'the chat asks all, waits, relaunches this workflow with the answers')
-ok(/Never ask the user directly/.test(x.prompts.source) && /"walk" \(header "Walk on"\)/.test(x.prompts.source) && /splitsMissing/.test(x.prompts.source) && /unzipped-base\.apk/.test(x.prompts.source), 'the source step detects the unzipped APK and missing splits and writes the questions')
+const ONLY_START = (x) => !x.res.questions || x.res.questions.every((y) => ['link', 'apk', 'walk', 'walkfallback', 'name'].includes(y.id))
 
-const A1 = [{ id: 'apk', question: 'apk?', answer: 'Pull from my phone (Recommended)', by: 'user' }, { id: 'walk', question: 'walk?', answer: 'My phone', by: 'user' }, { id: 'name', question: 'name?', answer: 'Mendo', by: 'user' }]
+let x = await sim('1 · start: unzipped APK, splits missing, a phone has the app → the ONE stop', L, { source: baseSrc })
+ok(x.res.stage === 'questions' && x.res.questions.map((y) => y.id).join() === 'apk,walk,name,walkfallback' && x.calls.join() === 'source', 'every question in one stop before the audit: apk, walk, name and where the walk runs if it fails')
+const fb = x.res.questions.find((y) => y.id === 'walkfallback')
+ok(fb.options.map((o) => o.label).join('|') === 'Play on emulator (Recommended)|Plugin emulator|Go on without the walk' && /\?$/.test(fb.question) && fb.header.length <= 12, 'the fallback offers the other devices and no walk; the walk\'s own first choice (My phone, pairip) is not the recommended fallback')
+ok(/AskUserQuestion tool, up to 4 questions per call/.test(x.res.nextStep) && /never start a timer/.test(x.res.nextStep) && /nothing is asked after this/.test(x.res.nextStep) && /"answers":\[\]/.test(x.res.nextStep), 'the chat asks all, waits, relaunches with the answers; it is told nothing is asked after this')
+ok(/the Source step's questions, asked once at the start, are the only ones/.test(x.prompts.source) && /splitsMissing/.test(x.prompts.source) && /unzipped-base\.apk/.test(x.prompts.source), 'agents never ask; the source step detects the unzipped APK and missing splits')
+
+const A1 = [{ id: 'apk', question: 'apk?', answer: 'Pull from my phone (Recommended)', by: 'user' }, { id: 'walk', question: 'walk?', answer: 'My phone', by: 'user' }, { id: 'name', question: 'name?', answer: 'Mendo', by: 'user' }, { id: 'walkfallback', question: 'f?', answer: 'Play on emulator (Recommended)', by: 'user' }]
 const pulled = { ...baseSrc, apks: ['/p.source/apk/base.apk', '/p.source/apk/split_config.en.apk'], apkFrom: 'phone', unzipped: false, splitsMissing: false, installable: true }
-x = await sim('2 · answers given: pulled from the phone, walk on the phone', { app: L, answers: A1 }, { source: pulled, ...fine })
-ok(x.res.done && x.calls.join() === 'source,audit: store + web,audit: APK files,audit: walk,gaps,report: PRD + theme', 'answered questions are not asked again; audit, gaps, report run')
-ok(/Pull from my phone": `.*pull <each path>/.test(x.prompts.source) && /source-app\/answers\.md/.test(x.prompts.source), 'the source step pulls the set and writes answers.md')
+x = await sim('2 · answered: no other stop until build-app, which asks nothing', { app: L, answers: A1 }, { source: pulled, ...fine })
+ok(x.res.done && x.calls.join() === 'source,audit: store + web,audit: APK files,audit: walk,gaps → decisions,report: PRD + theme' && ONLY_START(x), 'audit, decisions and report run without a stop')
+ok(/Pull from my phone": `.*pull <each path>/.test(x.prompts.source) && /source-app\/answers\.md/.test(x.prompts.source) && /Keep its "## Decided without asking" section/.test(x.prompts.source), 'the source step pulls the set and writes answers.md, keeping earlier decisions')
 ok(/the user's phone moto e22s \(serial ZD22\)/.test(x.prompts['audit: walk']) && /phone save S/.test(x.prompts['audit: walk']) && /phone restore S/.test(x.prompts['audit: walk']) && !/uninstall com\.x/.test(x.prompts['audit: walk']), 'the walk runs on the phone, saves and restores its settings, never uninstalls')
 ok(/dexdump/.test(x.prompts['audit: APK files']) && /- L<nn> · <path>/.test(x.prompts['audit: APK files']) && /hashes .* > source-app\/res-hashes\.txt/.test(x.prompts['audit: APK files']), 'the APK files step records layouts (L), code data (dexdump) and file hashes')
-ok(/- Name: \*\*<the new name>\*\* \[user\]" with the new name "Mendo"/.test(x.prompts['report: PRD + theme']) && /check \. --apk`/.test(x.prompts['report: PRD + theme']) && /then senior QA and the final audit/.test(x.res.nextStep), 'the report names the answered name; the next step runs the whole build chain')
+ok(/nothing is asked after the start of this run: you decide each gap and record it/.test(x.prompts['gaps → decisions']) && /by: "decided"/.test(x.prompts['gaps → decisions']) && /### gap-<n> · <question>/.test(x.prompts['gaps → decisions']), 'gaps are decided (closest to the evidence) and recorded in answers.md and DECISIONS.md')
+ok(/\[decided: gap-<n>\]/.test(x.prompts['report: PRD + theme']) && /Nothing is asked and nothing is guessed/.test(x.prompts['report: PRD + theme']) && /"Mendo"/.test(x.prompts['report: PRD + theme']) && /check \. --apk`/.test(x.prompts['report: PRD + theme']), 'the report cites decisions, decides a late gap the same way, and never returns a question')
+ok(/"decideAll":true/.test(x.res.nextStep) && /without asking anything/.test(x.res.nextStep) && /then senior QA and the final audit/.test(x.res.nextStep), 'build-app is started with decideAll: no question in the contract or the build')
 
-x = await sim('3 · the walk reaches no screen', { app: L, answers: A1 }, { source: pulled, ...fine, 'audit: walk': { walked: 0, fields: 0, outputs: 0, navigation: 0, notReached: [], note: 'stopped at Play\'s licence screen' } })
-ok(x.res.stage === 'questions' && x.res.questions[0].id === 'walkfail-1' && /licence screen/.test(x.res.questions[0].question) && x.res.questions[0].options.some((o) => o.label === 'Go on without the walk') && !x.calls.includes('gaps'), 'a failed walk stops with the walkfail-1 question before any PRD work')
+const deadWalk = { walked: 0, fields: 0, outputs: 0, navigation: 0, notReached: [], note: 'stopped at Play\'s licence screen' }
+x = await sim('3 · the walk reaches no screen → the fallback chosen at the start, in the same run', { app: L, answers: A1 }, { source: pulled, ...fine, 'audit: walk': deadWalk, 'audit: walk (play)': { walked: 9, fields: 1, outputs: 1, navigation: 10, notReached: [] } })
+ok(x.res.done && ONLY_START(x) && x.calls.includes('audit: walk (play)') && /installed from Google Play by the user/.test(x.prompts['audit: walk (play)']) && /check \. --apk`/.test(x.prompts['report: PRD + theme']), 'no question: the second walk runs on Play on the emulator and its screens count')
 
-const A2 = [...A1, { id: 'walkfail-1', question: 'w?', answer: 'Play on emulator', by: 'user' }]
-x = await sim('4 · after walkfail: Play on the emulator; evidence kept', { app: L, answers: A2 }, { source: { ...pulled, have: have({ store: 5, static: 80 }) }, ...fine })
-ok(!x.calls.includes('audit: store + web') && !x.calls.includes('audit: APK files') && /installed from Google Play by the user/.test(x.prompts['audit: walk']) && /market:\/\/details\?id=com\.x/.test(x.prompts['audit: walk']), 'kept evidence is not redone; the walk now installs from Play on the emulator')
+x = await sim('4 · both walks reach no screen → no walk, recorded, no question', { app: L, answers: A1 }, { source: pulled, ...fine, 'audit: walk': deadWalk, 'audit: walk (play)': deadWalk })
+ok(x.res.done && ONLY_START(x) && /check \. --apk --no-walk`/.test(x.prompts['report: PRD + theme']) && /the devices tried and what each returned/.test(x.prompts['report: PRD + theme']) && x.logs.some((l) => /no screen reached on phone or play — PRD\.md comes from the files and screenshots; nothing is asked/.test(l)), 'the PRD is written from the files; Sources records both tries')
+ok(/One of them is the walk: it reached no screen \(phone then play\)/.test(x.prompts['gaps → decisions']) && /first option "Go on without the walk"/.test(x.prompts['gaps → decisions']), 'going on without the walk is a recorded decision, so a later run does not re-audit for it')
 
-x = await sim('5 · gaps found before PRD.md', { app: L, answers: A2 }, { source: { ...pulled, have: have({ store: 5, static: 80, walk: 12 }) }, ...fine, gaps: { questions: [q('P1', ['500 characters', '1000 characters']), q('P2', ['Roboto', 'Inter'])] } })
-ok(x.res.stage === 'questions' && x.res.questions.map((y) => y.id).join() === 'P1,P2' && !x.calls.includes('report: PRD + theme'), 'every gap is asked before PRD.md is written')
+x = await sim('5 · the walk agent returns nothing → the fallback runs', { app: L, answers: A1 }, { source: pulled, ...fine, 'audit: walk': null, 'audit: walk (play)': { walked: 4, fields: 0, outputs: 0, navigation: 3, notReached: [] } })
+ok(x.res.done && x.calls.includes('audit: walk (play)') && ONLY_START(x), 'a dead walk agent is a failed walk: the fallback, no question')
 
-const A3 = [...A2, { id: 'P1', question: 'p1?', answer: '500 characters', by: 'user' }, { id: 'P2', question: 'p2?', answer: 'Roboto', by: 'user' }]
-x = await sim('6 · gaps answered; the report finds one more', { app: L, answers: A3 }, { source: { ...pulled, have: have({ store: 5, static: 80, walk: 12 }) }, ...fine, 'report: PRD + theme': { ready: false, screens: 0, features: 0, fields: 0, assumed: 0, notObserved: 0, check: '', questions: [q('P3', ['Daily', 'Weekly'])] } })
-ok(!x.calls.includes('gaps') && x.res.stage === 'questions' && x.res.questions.map((y) => y.id).join() === 'P3', 'answered gaps are not asked again; a gap the report finds is asked too')
+const A2 = [...A1.filter((a) => a.id !== 'walkfallback'), { id: 'walkfallback', question: 'f?', answer: 'Go on without the walk', by: 'user' }]
+x = await sim('6 · fallback "Go on without the walk" and the walk fails → no second walk', { app: L, answers: A2 }, { source: pulled, ...fine, 'audit: walk': deadWalk })
+ok(x.res.done && !x.calls.some((c) => /audit: walk \(/.test(c)) && /--no-walk/.test(x.prompts['report: PRD + theme']), 'the answer from the start is followed')
 
 x = await sim('7 · the user chose no walk (unzipped APK only)', { app: L, answers: [{ id: 'apk', question: 'a?', answer: 'Go on without the walk', by: 'user' }, { id: 'name', question: 'n?', answer: 'Mendo', by: 'user' }] }, { source: { ...baseSrc, phone: '', phoneModel: '' }, ...fine })
-ok(x.res.done && !x.calls.includes('audit: walk') && /check \. --apk --no-walk`/.test(x.prompts['report: PRD + theme']), 'no walk is run; the check is told the user chose none')
+ok(x.res.done && !x.calls.includes('audit: walk') && /check \. --apk --no-walk`/.test(x.prompts['report: PRD + theme']), 'no walk question, no fallback question, no walk; the check is told')
 
-x = await sim('8 · CONTRACT.md here: no question, straight to the build', L, { source: { ...baseSrc, resume: 'build', have: have({ contract: true, dartFiles: 9 }) } })
-ok(x.res.resumed === 'build' && !x.res.questions, 'finished work is continued without re-asking')
-x = await sim('9 · PRD.md ready, no contract: straight to the contract', L, { source: { ...baseSrc, resume: 'prd', have: have({ store: 5, static: 80, walk: 12, prd: true, prdProblems: 0 }) } })
-ok(x.res.resumed === 'prd' && /"noFigma":true/.test(x.res.nextStep), 'a finished PRD.md goes to build-app without a new audit')
-x = await sim('10 · the walk agent returns nothing: asked, never skipped silently', { app: L, answers: A1 }, { source: pulled, ...fine, 'audit: walk': null })
-ok(x.res.stage === 'questions' && /^walkfail-1$/.test(x.res.questions[0].id) && /no result from the walk/.test(x.res.questions[0].question) && !x.calls.includes('report: PRD + theme'), 'a dead walk is a question, not a PRD without a walk')
+x = await sim('8 · PRD.md ready + CONTRACT.md + code: build-app re-audits the contract, nothing asked', L, { source: { ...baseSrc, have: have({ store: 5, static: 80, walk: 12, prd: true, prdProblems: 0, contract: true, app: true, dartFiles: 9 }) } })
+ok(x.res.resumed === 'build' && !x.res.questions && x.calls.join() === 'source' && /with args \{"noFigma":true,"decideAll":true\}/.test(x.res.nextStep) && /re-audited against PRD\.md/.test(x.res.nextStep), 'no question, no audit; build-app re-audits CONTRACT.md with decideAll and continues from the code')
+
+x = await sim('9 · PRD.md ready, no contract: straight to the contract', L, { source: { ...baseSrc, have: have({ store: 5, static: 80, walk: 12, prd: true, prdProblems: 0 }) } })
+ok(x.res.resumed === 'prd' && /"noFigma":true,"decideAll":true/.test(x.res.nextStep), 'a finished PRD.md goes to build-app without a new audit or a question')
+
+const rc = have({ store: 52, static: 114, walk: 0, prd: true, prdProblems: 137, staticMissing: ['layouts', 'data', 'hashes'], contract: true, app: true, dartFiles: 127 })
+x = await sim('10 · Repair Coach: contract + 127 .dart files, PRD.md fails the check, static.md lacks the 0.49.0 parts', { app: L, answers: [{ id: 'apk', question: 'a?', answer: 'Go on without the walk', by: 'user' }, { id: 'name', question: 'n?', answer: 'Keep Mendwise (Recommended)', by: 'user' }] }, { source: { ...baseSrc, phone: '', phoneModel: '', have: rc }, ...fine, 'audit: APK files (missing parts)': { layouts: 48, dataTables: 3 } })
+ok(x.calls.join() === 'source,audit: APK files (missing parts),gaps → decisions,report: PRD + theme' && ONLY_START(x) && x.logs.some((l) => /re-auditing PRD\.md: 137 check problem\(s\); static\.md lacks layouts, data, hashes/.test(l)), 'store.md kept; only the missing static parts added; gaps decided; PRD.md re-audited — no full audit, no stop')
+ok(/change none of its lines\. It lacks: layouts, data, hashes/.test(x.prompts['audit: APK files (missing parts)']) && /PRD\.md from an earlier run is here \(137 check problem\(s\)\): continue from it/.test(x.prompts['report: PRD + theme']) && /re-audits the CONTRACT\.md already here/.test(x.res.nextStep), 'the supplement adds only steps 8–10; the report continues PRD.md; build-app re-audits the contract')
+ok(/with the new name the user answered at the start: "Mendwise";/.test(x.prompts['report: PRD + theme']), '"Keep Mendwise" keeps the name Mendwise')
 console.log(fails ? `\n${fails} FAIL` : '\nall ok')
 if (fails) process.exitCode = 1

@@ -48,6 +48,9 @@
 //                         --add: the questions add to the recorded ones (a contract re-audit), else they replace them
 //                         — records the contract's questions (asked or not) and the chat's answers in .pipeline/, then writes
 //                           DECISIONS.md: per question its options, the one selected and by whom
+//   ids [--ios <bundle id>] [--fix] [--root <dir>] — the app ids as the team's apps have them (ai_ppt_generater, IPTV_two:
+//                               android namespace = applicationId, MainActivity in kotlin/<that id's path> with that package);
+//                               --ios: every Runner PRODUCT_BUNDLE_IDENTIFIER is it (RunnerTests: <it>.RunnerTests); --fix makes them so
 //   stray [--root <dir>]      — fails if a file was added since the baseline commit outside the app-factory allowlist
 //   report <lessons|size|cleanup|run> <text...> — a section of PROGRESS.md (no separate files)
 //   timing start <stage> | timing pause <reason> | timing end [note] | timing
@@ -197,13 +200,15 @@ export const realIosDevices = (json) => (json.result?.devices || []).filter((d) 
   .map((d) => ({ udid: d.hardwareProperties?.udid || '', name: d.deviceProperties?.name || '', type: d.hardwareProperties?.deviceType || '', developerMode: d.deviceProperties?.developerModeStatus || '' }))
 // devicectl's JSON goes to a temp file: `--json-output -` still prints the table (devicectl 477.39, Xcode 26.1.1)
 // devices pick: a usable phone first, else the plugin's own emulator / simulator — no question to the user, no waiting.
-// Android: woken; a lock screen gets one swipe up; still locked (it has a code) → skipped. iPhone: Developer Mode on.
-// skipped = each connected phone not used, with why, for the report.
-export function pickPhone(platform, phones, unlocked) {
+// Android: below the app's minSdk → skipped (the install would fail INSTALL_FAILED_OLDER_SDK — Mendwise 2026-11-04 found
+// that again in every test round); woken; a lock screen gets one swipe up; still locked (it has a code) → skipped.
+// iPhone: Developer Mode on. skipped = each connected phone not used, with why, for the report.
+export function pickPhone(platform, phones, unlocked, minSdk = 0) {
   const skipped = []
   for (const p of phones) {
     const id = p.serial || p.udid
     const why = platform === 'ios' ? (p.developerMode === 'disabled' ? 'Developer Mode is off (Settings → Privacy & Security → Developer Mode)' : '')
+      : minSdk && p.sdk && p.sdk < minSdk ? `Android API ${p.sdk} is below the app's minSdk ${minSdk} — the app cannot be installed on it`
       : unlocked(id) ? '' : 'locked with a code — a swipe did not open it'
     if (!why) return { phone: p, skipped }
     skipped.push({ id, name: p.model || p.name || '', why })
@@ -224,7 +229,11 @@ function devicesPick(platform, a) {
     sleepMs(1000)
     return !locked(id)
   }
-  const { phone, skipped } = pickPhone(platform, phones, unlocked)
+  // the app's minSdk (a number in android/app/build.gradle(.kts); flutter.minSdkVersion is Flutter's own, which every phone it runs on has)
+  const gradle = ['android/app/build.gradle.kts', 'android/app/build.gradle'].map((f) => path.join(process.env.PIPELINE_DIR || process.cwd(), f)).find((f) => fs.existsSync(f))
+  const minSdk = Number((gradle && fs.readFileSync(gradle, 'utf8').match(/^\s*minSdk(?:Version)?\s*=?\s*(\d+)/m) || [])[1] || 0)
+  if (platform === 'android' && minSdk) for (const p of phones) p.sdk = Number(sh(p.serial, 'getprop', 'ro.build.version.sdk').trim()) || 0
+  const { phone, skipped } = pickPhone(platform, phones, unlocked, minSdk)
   if (phone) return JSON.stringify({ platform, kind: 'phone', ...(phone.serial ? { serial: phone.serial } : { udid: phone.udid }), name: phone.model || phone.name || '', skipped })
   if (a.includes('--phone-only')) return JSON.stringify({ platform, kind: 'none', skipped }) // a build run starts its own emulator / simulators
   const up = JSON.parse(devicesUp(platform, a))
@@ -653,6 +662,56 @@ function decisions(root, a = []) {
   const head = `# Decisions\n\n${qs.length} question(s): ${asked} asked, ${qs.length - asked} not asked (recommended option used). Chosen by the user: ${count.user}; decided without asking: ${count.decided}; skipped in the user's reply: ${count.skipped};${count.timeout ? ` no reply in 5 minutes: ${count.timeout};` : ''} unattended: ${count.unattended}; waiting: ${count.waiting}.\nCONTRACT.md lines tagged with a question's id (e.g. "(Q3)") follow the selected option.\n`
   fs.writeFileSync(path.join(root, 'DECISIONS.md'), [head, ...body].join('\n'))
   return `DECISIONS.md: ${qs.length} question(s), ${asked} asked — user ${count.user}, decided ${count.decided}, skipped ${count.skipped}, no reply ${count.timeout}, unattended ${count.unattended}, waiting ${count.waiting}, not asked ${count.notAsked}`
+}
+
+// The app's ids, the way the team's own apps have them (ai_ppt_generater: namespace = applicationId = com.example.pptmaker,
+// kotlin/com/example/pptmaker/MainActivity.kt; IPTV_two: com.example.iptv_player the same). A rebuild that keeps the store
+// package (applicationId) but leaves flutter create's namespace and folder (Mendwise, 2026-11-05: namespace
+// com.aifix.repairai.mendwise, applicationId com.aifix.repairai.diyguide) is fixed here.
+function ids(root, a) {
+  const at = (...f) => path.join(root, ...f)
+  const gradle = ['android/app/build.gradle.kts', 'android/app/build.gradle'].find((f) => fs.existsSync(at(f)))
+  if (!gradle) return 'no android/app/build.gradle(.kts) — nothing to check'
+  const fix = a.includes('--fix'), ios = optOf(a)('--ios'), bad = [], done = []
+  let g = fs.readFileSync(at(gradle), 'utf8')
+  const appId = (g.match(/applicationId\s*=?\s*["']([\w.]+)["']/) || [])[1]
+  if (!appId) throw new Error(`${gradle}: no applicationId`)
+  const ns = (g.match(/namespace\s*=?\s*["']([\w.]+)["']/) || [])[1]
+  if (ns !== appId) {
+    if (fix) { g = g.replace(/(namespace\s*=?\s*["'])[\w.]+(["'])/, `$1${appId}$2`); fs.writeFileSync(at(gradle), g); done.push(`${gradle}: namespace ${ns} → ${appId}`) }
+    else bad.push(`${gradle}: namespace ${ns || '(none)'} is not the applicationId ${appId}`)
+  }
+  const srcDir = at('android/app/src/main')
+  const mains = ['kotlin', 'java'].flatMap((k) => fs.existsSync(path.join(srcDir, k)) ? walk(path.join(srcDir, k)).map((f) => path.join(srcDir, k, f)).filter((f) => /\/MainActivity\.(kt|java)$/.test(f)) : [])
+  for (const f of mains) {
+    const kind = path.relative(srcDir, f).split(path.sep)[0], want = path.join(srcDir, kind, ...appId.split('.'), path.basename(f))
+    const t = fs.readFileSync(f, 'utf8'), pkg = (t.match(/^package\s+([\w.]+)/m) || [])[1]
+    if (f === want && pkg === appId) continue
+    if (!fix) { bad.push(`${path.relative(root, f)}: package ${pkg} — the file belongs in ${path.relative(root, want)} with package ${appId}`); continue }
+    // every file of MainActivity's package moves with it (the ads' native ad factories sit beside it)
+    const from = path.dirname(f), to = path.dirname(want)
+    for (const n of fs.readdirSync(from).filter((n) => /\.(kt|java)$/.test(n))) {
+      const src = path.join(from, n), body = fs.readFileSync(src, 'utf8')
+      if ((body.match(/^package\s+([\w.]+)/m) || [])[1] !== pkg) continue
+      fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(path.join(to, n), body.replace(/^package\s+[\w.]+/m, `package ${appId}`))
+      if (from !== to) fs.rmSync(src)
+      done.push(`${path.relative(root, path.join(to, n))}: package ${appId}`)
+    }
+    for (let d = from; d !== path.join(srcDir, kind) && !fs.readdirSync(d).length; d = path.dirname(d)) fs.rmdirSync(d)
+  }
+  const manifest = at('android/app/src/main/AndroidManifest.xml')
+  if (fs.existsSync(manifest) && ns && ns !== appId) {
+    const m = fs.readFileSync(manifest, 'utf8'), m2 = m.split(`"${ns}.`).join(`"${appId}.`)
+    if (m2 !== m) { if (fix) { fs.writeFileSync(manifest, m2); done.push(`AndroidManifest.xml: ${ns}.* → ${appId}.*`) } else bad.push(`AndroidManifest.xml names classes in ${ns}`) }
+  }
+  const pbx = at('ios/Runner.xcodeproj/project.pbxproj')
+  if (ios && fs.existsSync(pbx)) {
+    const p = fs.readFileSync(pbx, 'utf8')
+    const p2 = p.replace(/PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);/g, (_, v) => `PRODUCT_BUNDLE_IDENTIFIER = ${/\.RunnerTests$/.test(v) ? `${ios}.RunnerTests` : ios};`)
+    if (p2 !== p) { if (fix) { fs.writeFileSync(pbx, p2); done.push(`project.pbxproj: bundle id ${ios}`) } else bad.push(`ios/Runner.xcodeproj: PRODUCT_BUNDLE_IDENTIFIER is not ${ios} (RunnerTests: ${ios}.RunnerTests)`) }
+  }
+  if (bad.length) throw new Error(`APP IDS (${bad.length}): ${bad.join('; ')} — run \`ids${ios ? ` --ios ${ios}` : ''} --fix\``)
+  return done.length ? `ids fixed: ${done.join('; ')}` : `ids ok: android ${appId} (namespace, MainActivity)${ios ? `, iOS ${ios}` : ''}`
 }
 
 function stray(root) {
@@ -1151,6 +1210,7 @@ function run([cmd, ...a]) {
   if (cmd === 'deps') return deps(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'colors') return colors(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'decisions') { const i = a.indexOf('--root'); return decisions(i >= 0 ? path.resolve(a[i + 1]) : process.cwd(), a) }
+  if (cmd === 'ids') { const i = a.indexOf('--root'); return ids(i >= 0 ? path.resolve(a[i + 1]) : process.cwd(), a) }
   if (cmd === 'stray') return stray(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'assets') return assetsCheck(a[0] === '--root' ? path.resolve(a[1]) : process.cwd())
   if (cmd === 'shard') return shard(Number(a[0]), a[1] === '--root' ? path.resolve(a[2]) : process.cwd())
@@ -1568,6 +1628,21 @@ function selftest() {
   assert.match(fs.readFileSync(path.join(dq, 'DECISIONS.md'), 'utf8'), /## Q8[\s\S]*\*\*Selected: Yes\*\* — decided without asking/, 'a gap decided after the start is recorded as decided')
   if (oldDir === undefined) delete process.env.PIPELINE_DIR; else process.env.PIPELINE_DIR = oldDir
 
+  // ids: namespace = applicationId and MainActivity in that package's folder (the team's apps); --ios sets every Runner id
+  const ip = fs.mkdtempSync(path.join(os.tmpdir(), 'ids-'))
+  fs.mkdirSync(path.join(ip, 'android/app/src/main/kotlin/com/a/old'), { recursive: true }); fs.mkdirSync(path.join(ip, 'ios/Runner.xcodeproj'), { recursive: true })
+  fs.writeFileSync(path.join(ip, 'android/app/build.gradle.kts'), 'android {\n    namespace = "com.a.old"\n    defaultConfig {\n        applicationId = "com.a.store"\n    }\n}\n')
+  fs.writeFileSync(path.join(ip, 'android/app/src/main/kotlin/com/a/old/MainActivity.kt'), 'package com.a.old\n\nclass MainActivity\n')
+  fs.writeFileSync(path.join(ip, 'android/app/src/main/kotlin/com/a/old/NativeAdFactory.kt'), 'package com.a.old\n\nclass NativeAdFactory\n')
+  fs.writeFileSync(path.join(ip, 'android/app/src/main/AndroidManifest.xml'), '<activity android:name=".MainActivity"/><receiver android:name="com.a.old.R"/>')
+  fs.writeFileSync(path.join(ip, 'ios/Runner.xcodeproj/project.pbxproj'), 'PRODUCT_BUNDLE_IDENTIFIER = com.a.old;\nPRODUCT_BUNDLE_IDENTIFIER = com.a.old.RunnerTests;\n')
+  assert.throws(() => run(['ids', '--ios', 'com.a.store', '--root', ip]), /APP IDS \(4\).*namespace com\.a\.old is not the applicationId com\.a\.store/)
+  assert.match(run(['ids', '--ios', 'com.a.store', '--fix', '--root', ip]), /ids fixed: .*namespace com\.a\.old → com\.a\.store/)
+  assert.ok(fs.existsSync(path.join(ip, 'android/app/src/main/kotlin/com/a/store/MainActivity.kt')) && fs.existsSync(path.join(ip, 'android/app/src/main/kotlin/com/a/store/NativeAdFactory.kt')) && !fs.existsSync(path.join(ip, 'android/app/src/main/kotlin/com/a/old')))
+  assert.match(fs.readFileSync(path.join(ip, 'android/app/src/main/kotlin/com/a/store/MainActivity.kt'), 'utf8'), /^package com\.a\.store$/m)
+  assert.match(fs.readFileSync(path.join(ip, 'ios/Runner.xcodeproj/project.pbxproj'), 'utf8'), /= com\.a\.store;\n.*= com\.a\.store\.RunnerTests;/)
+  assert.match(fs.readFileSync(path.join(ip, 'android/app/src/main/AndroidManifest.xml'), 'utf8'), /"com\.a\.store\.R"/)
+  assert.match(run(['ids', '--ios', 'com.a.store', '--root', ip]), /ids ok: android com\.a\.store/)
   // stray: only the allowlist may be added after the baseline; the user's earlier files never count
   const pj = fs.mkdtempSync(path.join(os.tmpdir(), 'stray-'))
   const gg = (c) => execSync(c, { cwd: pj, stdio: 'ignore' })
@@ -1863,6 +1938,9 @@ flutter:
     assert.deepEqual(pickPhone('android', [], () => true), { phone: null, skipped: [] })
     assert.equal(pickPhone('ios', [{ udid: 'U1', name: 'XR', developerMode: 'disabled' }, { udid: 'U2', name: '11', developerMode: 'enabled' }], () => false).phone.udid, 'U2')
     assert.equal(pickPhone('ios', [{ udid: 'U3', name: 'SE', developerMode: '' }], () => false).phone.udid, 'U3', 'status unknown: tried')
+    assert.deepEqual(pickPhone('android', [{ serial: 'R', model: 'RMX3506', sdk: 30 }, { serial: 'B', model: 'Moto', sdk: 33 }], () => true, 32),
+      { phone: { serial: 'B', model: 'Moto', sdk: 33 }, skipped: [{ id: 'R', name: 'RMX3506', why: 'Android API 30 is below the app\'s minSdk 32 — the app cannot be installed on it' }] }, 'a phone below minSdk is skipped once, with why')
+    assert.equal(pickPhone('android', [{ serial: 'R', sdk: 30 }], () => true, 0).phone.serial, 'R', 'no minSdk number → not checked')
     assert.throws(() => run(['devices', 'pick', 'web']), /devices pick android\|ios/) }
   // settled: two 3 s samples in a row ≤ 50% busy; steal (the host taking the CPU) counts as busy
   assert.equal(cpuBusy('cpu  100 0 100 800 0 0 0 0 0 0', 'cpu  150 0 150 900 0 0 0 0 0 0'), 50)

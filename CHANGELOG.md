@@ -2,6 +2,190 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.55.0 — 2026-11-05 — not committed
+
+**A rerun on a folder that already has the app continues from it — checked against the Mendwise folder (`/Users/mach/app-dev.v1`).** The resume itself has been in the plugin since 2026-11-04 (no-PRD: `source-app.mjs status` → PRD.md re-audited when its check fails, CONTRACT.md and `lib/` kept; build-app: contract re-audit, "existing work" step, groups whose criteria pass are not built again). Under 0.54's checker Mendwise's status is `{prd: true, prdProblems: 12, staticMissing: ["assets"], contract: true, dartFiles: 218}`, so a rerun re-audits PRD.md and continues from the code. Tracing that rerun found 5 defects, fixed here:
+
+| Defect (evidence) | Now |
+|---|---|
+| The source step rewrote `source-app/answers.md` with only the new run's answers: Mendwise's P1–P18 (platforms, minimum OS, the name Mendwise, keep package `com.aifix.repairai.diyguide`) would be lost and decided again | The new answers are added; an answer with the same id is replaced, every other earlier answer and "Decided without asking" stay. A subject already answered there (name, Firebase, purchases, keys) is not asked again |
+| Earlier answers to questions 0.54 no longer asks (P8 font Karla, P9 teal `#0F9D8A`, P10–P12 radius, elevation, icon style, P13 "New AI-generated photos" because source images "may not be copied") would still be cited as `[user]` against the source theme | Moved, as written, under "## Superseded" in answers.md with why; the report reads answers.md whenever it exists and cites nothing under Superseded |
+| The APK an earlier run audited was moved out of the folder (Mendwise: `/Users/mach/app-dev.v1.sources/Repair Coach AI/`, 2026-11-04 20:39), so `apks` would be empty, `NEED_STATIC` false and `reuse` never run | When static.md or PRD.md's Sources names an audited APK and the folder has none, the source step searches beside the project (`find "$(dirname "$(pwd)")" -maxdepth 3 …`, 0.09 s on this Mac — finds that folder) and uses the one of the same package |
+| Answer "I'll add the APK set" stopped the run unless the set was installable — an unzipped base (all Mendwise has) could never be used | It stops only when no APK and no unzipped APK is there; an unzipped or incomplete set is used for its files (static.md, `reuse`), the walk runs where "walk"/"walkfallback" says |
+| The existing-work step counted a criterion done when its unit test passed, also when the test faked the API of a provided key (Mendwise: every AI test used `MockClient`) — those groups would not be rebuilt or retested | A test that replaces the client of a key `secret names` lists with a fake marks the criterion failing: built and tested again against the real API |
+
+**App ids as the team's apps have them.** `ai_ppt_generater`: namespace = applicationId = `com.example.pptmaker`, `kotlin/com/example/pptmaker/MainActivity.kt`; `IPTV_two`: `com.example.iptv_player` the same. Mendwise had namespace `com.aifix.repairai.mendwise` (flutter create's `--org` + project name) and applicationId `com.aifix.repairai.diyguide`, MainActivity in `kotlin/com/aifix/repairai/mendwise/`.
+
+### Changed
+
+- `scripts/pipeline.mjs`: new `ids [--ios <bundle id>] [--fix] [--root <dir>]` — fails when the Android namespace is not the applicationId, MainActivity is not in `kotlin|java/<applicationId as folders>/` with that `package` line, the manifest names classes in the old namespace, or (with `--ios`) a Runner `PRODUCT_BUNDLE_IDENTIFIER` is not the id (RunnerTests: `<id>.RunnerTests`); `--fix` sets the namespace, moves MainActivity and every file of its package, rewrites their `package` lines and the manifest, removes the emptied folders, sets the iOS ids. Selftest added.
+- `workflows/build-app.js`: the Flutter make rule runs `ids --fix` after setting applicationId and on code already here (`--ios` when PRD.md or CONTRACT.md names the iOS bundle id); the final checks run it (six commands with the own stack); the existing-work step's faked-key rule (above).
+- `workflows/app-dev-without-prd.js`: source step 1 (APK beside the project), step 2 (answers.md added to, Superseded), step 8 (answered subjects not asked), the "I'll add the APK set" stop; the report reads answers.md whenever it exists, and PRD §1 gets "- Package: <id>" (applicationId = namespace = MainActivity's package; the source's when the app ships as its update) and "- iOS bundle id: <id>" (the source App Store app's `bundleId` from the iTunes lookup, else the Android package).
+- `scripts/simulate.mjs`, `scripts/simulate-without-prd.mjs`: assertions for each change above; new scenario 2b ("I'll add the APK set").
+- `.claude-plugin/plugin.json`: 0.55.0.
+
+### Checked
+
+- `pipeline.mjs selftest` ok (new `ids` case: namespace, MainActivity and a second file of its package moved, manifest and iOS ids rewritten, then `ids` ok); `source-app`, `secrets` selftests ok; `ads-install selftest` ok.
+- `simulate.mjs` exit 0 (115 ok); `simulate-without-prd.mjs` exit 0.
+- `ids` on a copy of Mendwise: reported the 2 problems; `--fix` changed the namespace and moved MainActivity to `kotlin/com/aifix/repairai/diyguide/`; `flutter build apk --debug` on that copy ✓ (65 s); `aapt2` on the APK: package `com.aifix.repairai.diyguide`, activity `com.aifix.repairai.diyguide.MainActivity`. The copy was deleted; `/Users/mach/app-dev.v1` itself is unchanged.
+- The beside-the-project `find` run from `/Users/mach/app-dev.v1` returns `/Users/mach/app-dev.v1.sources/Repair Coach AI/AndroidManifest.xml`.
+
+### Not checked
+
+- A real rerun of `/app-factory:app-dev-without-prd` on `/Users/mach/app-dev.v1` (the answers.md merge, the Superseded move and the PRD re-audit are agent steps; only the prompts were checked by the simulator).
+- `ids --fix` on an iOS project build (`--ios` was checked on the pbxproj text only).
+
+## 0.54.0 — 2026-11-05 — not committed
+
+**From the audit of the Mendwise run (`/Users/mach/app-dev.v1`, plugin 0.49/0.50, 2026-11-04 08:38 → 2026-11-05 04:01 UTC).** Every mistake found there now has a rule, a command or a check, for every app, not only this one:
+
+| Mendwise mistake (evidence) | Now |
+|---|---|
+| Your own app treated as someone else's: the theme had to be ≥ 60° of hue from the source (`source-app.mjs` `distinct`), so your blue `#4B56D4` became teal `#0F9D8A`; the source's icon, illustrations and photos were "Not copied", and the build failed on any reuse (`copied`, added in 0.48.0) | The source app is the user's own: its colours are kept (checked: `theme.json` primary and secondary = the source's), its icon, images, Lottie animations, sounds and fonts are reused (`source-app.mjs reuse` → `source-app/assets/`, each an `A` id the PRD must place); no "new" colour, theme, font or icon-style question; the name question offers "Keep <name>" first |
+| 0 images shipped: the APK's 17 Lottie files, 3 quiz sounds, launcher icon and 10 flags unused; "New AI-generated photos" recommended though the build cannot make them; icon tiles instead | `reuse` takes them; an image not in the APK is fetched with `source-app.mjs image` (Openverse, public domain first) and opened before it is kept; a recommended option must be one the build can deliver; never an "icon tiles" option |
+| The IFM key was stored, but the user's own Run had no `--dart-define-from-file`: the app sent an empty `Bearer`, IFM answered 401, the screen said "Request failed" | `secret runconfig` writes the Android Studio and VS Code run configurations and a README section with the key file; an empty provided key never sends a request and says so; a failed request logs its status and the API's message |
+| Every automated test faked the AI (`MockClient`, flutter-app L6 "no test may reach the network"); the one real call, in senior QA 13 h after the code, found 4 of 7 requests failing (X98) | A provided key is tested against the real API (flow tests, senior QA); new L14: ≥ 6 real answers checked against fixed rules and the prompt refined, recorded in `.pipeline/real-answers.md`; fakes only for missing keys and for what a device test cannot drive |
+| Ads: 85 min, 3 rounds, 0 of 11 placements seen — no Firebase files, and the team's code starts AdMob only after Firebase (`ads_splash_utils.dart:105`, `:288`, `:292` → `:471`) | The Firebase files are asked for at the start (never "Run without Firebase (Recommended)"); missing → the ads are wired and audited once and blocked with that reason; the owner's AdMob ids missing → Google's test ids, and the ads are proven with them |
+| No purchase screen: "Subscriptions aren't available yet"; the team's premium screen was not in the plugin, and its build shows a hard-coded offering of another app | The team's premium screen is a reference in the template; flutter-ads section 7: plans from `Purchases.getOfferings()`, shown per Remote Config, Restore, `resetAdIds`; a RevenueCat Test Store key is asked at the start and purchases are tested for real |
+| Two "first launch" flags (`settings.onboarding_done` and the team's `isFirstTime`) | One flag (the team's); the flow test relaunches the app and asserts the intro does not show again |
+| The Android 11 phone (minSdk 32) was tried again in each of 4 test stages | `devices pick` skips a phone below the app's minSdk once, with the reason |
+
+12 files besides this entry, plus 1 new template file.
+
+### Changed
+
+- `scripts/source-app.mjs`:
+  - `check`: section "Not copied" → "Reused from the source app"; `assets.md` is evidence and its `A` ids must be cited; theme rule: `colors.primary` / `colors.secondary` must equal `source.primary` / `source.secondary` (was: at least 60° of hue away; `hsl` and `distinct` removed); `status.staticMissing` lists `assets` instead of `hashes`.
+  - new `reuse <unzipped apk> <project>`: copies the launcher icon, raster images (largest density per name), `res/raw` (Lottie `.json`, sounds), `res/font` and the APK's `assets/` into `source-app/assets/<kind>/`, library files (`abc_`, `mtrl_`, ad networks' prefixes) left out, and writes `source-app/assets.md` (`- A<nn> · <kind> · <file> — <size> · from <apk path>`).
+  - new `image <project> <slot> <words…> [--next <n>]`: Openverse search (no key), `license=cc0,pdm` first, else `license_type=commercial` marked "attribution required"; a host that answers with no `image/*` is passed over for the next hit; saved as `assets/images/<slot>.png` (`sips`), credited in `assets/images/CREDITS.md`.
+  - removed `hashes` and `copied`. Selftest: own colours kept, `reuse` (largest density, library and XML files left out, `A` ids required in PRD.md), `pick` with `--next`.
+- `workflows/app-dev-without-prd.js`: the source app is the user's own (intro, `whenToUse`, phase details); step 10 runs `reuse` (split APKs included) instead of `hashes`; PRD section 11 keeps the source theme and font; section 12 "Reused from the source app" (one row per `A` id, "Images not in the APK" with search words, the user's own servers used, a key found in the APK stored with `secret`); section 13 covers `A` ids; the name question offers "Keep <name>" first; three new start questions: `firebase`, `purchases` (RevenueCat Test Store key first), `keys` (your services' keys and hosts, imported with `secret import`).
+- `workflows/build-app.js`:
+  - contract: the owner's AdMob App ID and ad ids are never asked (Google's test ids); a recommended option must be deliverable; the Firebase-files question (with the fact) and the RevenueCat question (Test Store key first); images, animations, sounds and the icon of a no-PRD PRD are the source's, a missing image is fetched; the paywall is a criterion (flutter-ads section 7); `decideAll` never "decides" a file, key or host — it takes what is present and the start answers.
+  - setup and first group run `secret runconfig`; the final checks run it again and no longer run `copied` (`copiedOk` removed from `done`).
+  - the integrator runs the L14 answer checks and fetches missing images; the flow-test writer tests provided keys against the real API and relaunches the app for a later-launch rule; the audit cites L1–L14.
+  - Ads phase: no Firebase files → `noFirebase`: one round, wiring checked and audited, ads criteria blocked with the reason, committed.
+- `scripts/secrets.mjs`: new `secret runconfig` (`.vscode/launch.json` `toolArgs`, `.idea/runConfigurations/main_dart.xml` `additionalArgs`, README section between `<!-- app-factory:run -->` markers; names only, never a value). Selftest added.
+- `scripts/pipeline.mjs`: `pickPhone(…, minSdk)` — `devices pick` reads the app's `minSdk` from `android/app/build.gradle(.kts)` and each phone's `ro.build.version.sdk`; a phone below it is skipped with why. Selftest added.
+- `scripts/ads-install.mjs` `template`: writes `templates/flutter/ads/reference/lib/in_app_purchase/app.dart` (the team's premium screen, never installed).
+- `skills/flutter-app/SKILL.md`: L6, L12 items 6–8, L13.7, new L14, T1, T4, T8, U12 (the source's Lottie files), U14 (the user's own files; `image` for a missing one).
+- `skills/flutter-ads/SKILL.md`: section 1 — Firebase starts AdMob (with file:line), test ids when the owner's are missing, RevenueCat Test Store key; section 2 — one first-launch flag; new section 7 — the premium screen.
+- `skills/ads-implementation/SKILL.md`: step 1 checks the Firebase files (missing → steps 2–7 and 9 only, no device rounds); step 8's seeding note.
+- `scripts/simulate.mjs`: the copy-check scenario replaced by run configurations at setup and at the end, L14 and image fetching by the integrator, and the no-Firebase ads path (113 `ok` lines). `scripts/simulate-without-prd.mjs`: the start questions include `firebase`, `purchases`, `keys`; the APK step runs `reuse`; the PRD keeps the source theme and has "Reused".
+- `GUIDE.md` (sections 4 and 4a), `README.md` (no-PRD, secrets and command rows), `.claude-plugin/plugin.json` 0.53.0 → 0.54.0.
+
+### Checked (all passed)
+
+- `source-app.mjs reuse` on the real Repair Coach AI base APK folder: 17 animations, 3 sounds, 3 launcher icons, 7 fonts, 18 images, each with an `A` id; 4 of the images are ad-network icons (`icon_close`, `icon_skip`, `icon_soundon`, `icon_soundoff`) that the PRD must mark "not used".
+- `source-app.mjs image` against the live Openverse API: a CC0 photo saved (1024×683) and credited; `--next 1` passed over `cdn.stocksnap.io`, which answered with an HTML page, and saved the next hit.
+- IFM: a request with an empty key → HTTP 401 "You didn't provide an API key"; one 5-token request with the stored key → HTTP 200.
+- The Android Studio run configuration field: the installed Flutter plugin 81.0.2 (`instrumented-flutter-idea-81.0.2.jar`, `io/flutter/run/SdkFields.class`) has `additionalArgs` and `filePath`, serialized by `XmlSerializer`.
+- Self-tests: `ads-install`, `source-app`, `pipeline`, `secrets`, `notify`, `release-check`, `configure`, `self-configure`. `simulate.mjs`: exit 0, 113 `ok`. `simulate-without-prd.mjs`: exit 0, all ok.
+
+### Not checked
+
+- A full run (no-PRD audit + build) with these rules: no agent has written a PRD with "Reused", run L14 on real answers, fetched images during a build, or built a paywall from section 7.
+- A RevenueCat Test Store purchase on a device; the Firebase-files path with real files.
+- Opening the written run configuration in Android Studio (the field name is verified from the plugin's class, the dialog was not opened).
+- The answer-quality rules of L14 judged on a real model's answers.
+
+## 0.53.0 — 2026-11-04 — not committed
+
+**Ads on any app, from the plugin alone:**
+- `/app-factory:ads-implementation` and the build's Ads phase copy the team's ads implementation (structure, files, style) into any Flutter app.
+- They put the team's ad lines into the app's own screens, launch and purchase code. The app's structure is kept.
+- A run needs no folder outside the plugin, never asks, and never stops for a missing piece.
+
+**Before:** a run on another Mac stopped and asked. Its report:
+- the team's `lib/ads` calls `showLog()` 109 times and `showToast()` 8 times, both defined in the team app's `custom_widgets.dart`, which the template left out;
+- the 9b audit pointed at `/Users/mach/testing/ai_ppt_generater`, which is not on that Mac;
+- `RECIPE.md`'s screen hunks mostly remove `/*` from code the team's app had in comments, so an app without that code had nothing to attach them to, and 11 files came out as "by hand";
+- the folder had no git repository, so `changes` / `verify` could not run;
+- the app's release signing pointed at a keystore of another Mac (`/Users/imac/…/invictes.jks`).
+
+10 files besides this entry, plus 1 new template file.
+
+### Changed
+
+- `scripts/ads-install.mjs`:
+  - **`template`** writes the new file `base/lib/widgets/custom_widgets.dart`. It holds the team's `showLog`, `showToast` and `appText` (from the team's `lib/widgets/custom_widgets.dart`) and the font name `appText` uses (`fontFamilyMedium`, from the team's `lib/service/app_constant.dart`), each as the team wrote it, taken by the new `decls()`.
+  - **`RECIPE.md`** now:
+    - says every file a run needs is in the plugin (`templates/flutter/ads/after/` and `before/`);
+    - names the after file in each section instead of the team's folder path;
+    - lists "The team's ad lines" for each file wired by hand: the live ad lines of the after file, with the team's line numbers (new `adLines()`; 10 sections).
+  - **`SUPPORT`:** the app's own `custom_widgets.dart` counts only when it defines all three of `showLog`, `showToast` and `appText`. Otherwise the installer copies the file from `base/`. The NOT DONE line "the app has no showLog() / showToast() / appText()" is removed. If the app has its own file at the team's path that lacks them, the NOT DONE line names the declarations to copy from `base/`.
+  - **Gradle 9:** the table `GRADLE9`. Besides the existing `google_mobile_ads ^7.0.0`, `fluttertoast` is now `^10.0.2` instead of the team's `^8.2.12`.
+    - Why: `^8.2.12` resolves to 8.2.14, which is compiled against SDK 33, and AGP 9.1.0's AAR metadata check fails on it ("Dependency 'androidx.fragment:fragment:1.7.1' requires … 34 or later … :fluttertoast is currently compiled against android-33", fresh `flutter create` app).
+    - 10.0.2 is what the IPTV app builds with on Gradle 9.3.1.
+    - It applies only when the app does not already list the package.
+  - **New `base <project>`** prints the `<base>` commit.
+    - A folder with no git repository gets one: `git init`, the app as it is in one commit "app-factory: base — the app before its ads" by app-factory, and build output listed in `.git/info/exclude`, so no app file is written.
+    - Uncommitted changes → exit 1 with the reason.
+  - **New `release <project>`** runs `flutter build apk --release` with `-Pandroid.injected.signing.store.file=~/.android/debug.keystore` (plus the password and alias). The release build for the device checks is signed with this Mac's debug key, whatever the app's own signing config says; that config is not touched.
+  - **Selftest:**
+    - "template whole": every `package:<team>/` import of `lib/ads` and `base/` is a template file;
+    - a fresh app gets the three helpers, and its NOT DONE list no longer has the helper line;
+    - Gradle 9 gives `fluttertoast ^10.0.2` and `google_mobile_ads ^7.0.0`;
+    - `base` makes a repository without writing an app file, leaves build output out, reuses the commit on a second run, and refuses uncommitted changes.
+- `templates/flutter/ads/`:
+  - new `base/lib/widgets/custom_widgets.dart`;
+  - `RECIPE.md` rebuilt (1474 → 1620 lines);
+  - `pubspec_lines.txt` gains `fluttertoast: ^8.2.12`, the team's line, because `base/` now imports it.
+- `skills/flutter-ads/SKILL.md`:
+  - **Rule:** "the team's implementation, in the app's structure", replacing "the team's change, nothing else". These are the team's, as written: `lib/ads`, `base/`, the Android side, and every ad line (the call, its arguments, condition, widget, place in the tree, order). The app's screens, launch, navigation, state and purchase code stay the app's. The only lines written for an app are ADAPTED lines.
+  - **No reason to ask or stop:** a missing helper comes from `base/`, a team screen with no counterpart is `--no-screen`, and a structure difference is handled by ADAPTED lines.
+  - **Section 2 rewritten:**
+    - the launch rule: an app with a launch screen, an app that picks its first screen in a controller or service, and an app that opens home directly;
+    - ad lines read from `after/<file>` at the line `RECIPE.md` lists;
+    - where `onTapInter` / `onTapRewardCall` / `checkPurchaseNormal` go (`lib/service/app_constant.dart` when the app has no file of app-wide functions);
+    - **hosting a native or banner:** a native goes into the app's own scroll at the team's relative position; a body that is not a scroll taking an extra child (a `GridView.count`, a single widget) is wrapped so the ad sits in a scroll; a widget that lacks ad lifecycle is converted `StatelessWidget` → `StatefulWidget`; a per-screen banner whose job lives inside another screen goes on that screen if it has a scrollable body, else `--no-screen`;
+    - **the intro:** an intro with a single button keeps its own button and page logic and gets only the native and the app-open calls — never the team's second button, its F4 `Positioned` region or its `.sp` font ternaries;
+    - **the purchase screen:** `UpsellScreen(…)` → the app's purchase screen with the app's own arguments, or none when it takes none (dropping the team's named args is a navigation swap, not an added line); a team function with no tap or action in the app (e.g. `checkPurchaseNormal` where the app limits nothing) goes in as the team wrote it, noted "not called"; no purchase screen at all → `--no-screen`;
+    - `resetAdIds()` next to the line where the app records a purchase; an app that records no premium state (a purchase screen that only returns a result) gets the team's `AdsVariable.isPurchase.value = true;` where the purchase succeeds, with `resetAdIds()` next to it;
+    - step 4 now lists **six** ADAPTED kinds (every non-team line must be exactly one, and 9b fails any other kind or a false stated fact): **import**; **wrapper** (a post-frame / `async` wrapper — incl. `main()` → `async` with `WidgetsFlutterBinding.ensureInitialized()` + `SharedPreferences.getInstance()` where the team's line reads a `prefs` the app lacks — a `State` member or a parameter); **navigation / state swap** (the app's own nav or state call, incl. the app's purchase-screen constructor); **GetMaterialApp wrap** (`GetMaterialApp` inside `ScreenUtilInit(1242×2688)` for an app without GetX / ScreenUtil); **host** (the `StatelessWidget` → `StatefulWidget` or body wrap above, slot only); **state** (the `isPurchase.value = true` line above).
+  - Section 3's helpers paragraph and the `lib/main.dart` NOT DONE line (now the exact `async` + `ensureInitialized` + `getInstance` recipe for an app with no app-wide `prefs`) are updated.
+- `skills/ads-implementation/SKILL.md`:
+  - the rule and "no question and no stop after step 1";
+  - step 1 uses `ads-install.mjs base` (the no-git question is gone);
+  - step 3's plan has one row per team ad line plus one per ADAPTED line;
+  - step 5 follows flutter-ads section 2;
+  - step 8's release build uses `ads-install.mjs release`;
+  - step 2/3 wording for the hosting / intro / purchase / state rules;
+  - the 9b audit reads the team's files in the plugin (`after/`, `base/`), not `/Users/mach/testing/ai_ppt_generater`, and FAILs an ADAPTED line of an unlisted kind or with a false fact about the app;
+  - step 10 reports every ADAPTED line, a git repository made in step 1, and the debug-key release build.
+- `workflows/build-app.js`: the ads lines of the coding rule, the audit, the contract rule, the interface step and the first group's step say "the team's ad lines of the team's screen with the same job (RECIPE.md lists them; read them in templates/flutter/ads/after/), nothing but the ADAPTED kinds of section 2 step 4" instead of "the RECIPE.md hunks, nothing of your own". The Ads phase prompt: step 1's `base` finds the build's repository, and gaps are decided by flutter-ads section 2.
+- `scripts/simulate.mjs`: the interface check matches the new wording.
+- `GUIDE.md` (the ads paragraph) and `README.md` (the `ads-install.mjs` row).
+- `.claude-plugin/plugin.json`: version 0.52.0 → 0.53.0.
+
+### Checked (all passed)
+
+- **Signing,** on a fresh `flutter create` app with a release signing config whose keystore does not exist (`/Users/imac/missing/invictes.jks`):
+  - `flutter build apk --release` failed: "Keystore file '/Users/imac/missing/invictes.jks' not found for signing config 'release'";
+  - with the injected signing it built;
+  - `apksigner verify --print-certs`: "CN=Android Debug", SHA-256 6fece323…b36ec, the same as `~/.android/debug.keystore`.
+- **The same app, with no git repository:**
+  - `ads-install.mjs base` made repository 34449aa;
+  - the installer copied `lib/ads`, the eight helpers (the new `custom_widgets.dart` included) and the Android lines;
+  - `flutter pub get` passed;
+  - `flutter analyze` gave 0 errors (48 infos, 3 warnings) before any wiring;
+  - `ads-install.mjs release .` gave PASS (53.1 MB APK). Before the Gradle 9 `fluttertoast` line it failed at the AAR metadata check.
+- **End-to-end wiring, by an agent, on an app that is not the team's base** — a plain Flutter + Navigator notes app (no GetX, no ScreenUtil): a launch through a service (not a splash widget), a one-button intro, a `GridView.count` StatelessWidget home, a notebook tap (the `onTapInter` feature), an export action (the `onTapRewardCall` reward), settings, and a no-argument purchase screen that records no premium state. Run twice:
+  - **first run** (before the rule additions): it completed with no hard stop, 0 analyze errors, a PASS release build and T1–T3 PASS, but reported six places the four ADAPTED kinds did not cover, where it had to improvise (convert-to-stateful, wrap the body, drop the purchase constructor args, invent a premium line, place a banner, scaffold `prefs`). Those six became the rules above.
+  - **second run** (after the additions, from a clean base): every one of the six was covered by a named rule (`host` ×2, the intro rule, a navigation swap, "not called", the `wrapper` recipe, `state`); **no line fell outside the six ADAPTED kinds.** `flutter analyze lib` → 0 errors; `ads-install.mjs release .` → PASS (60.2 MB APK, debug-key signed); `changes . <base>` → T1, T2 (with the 15 reshaped app lines as `--slot-edits`), T3, R3, R4, N1 PASS. Each of the 15 `--slot-edits` was verified by hand to be an app line a team line reshapes (e.g. `GridView.count` → scroll + column, `main()` → `async`, the notebook tap → `onTapInter`), with the app's own behaviour kept inside the new wrapping — no app code lost.
+- **Selftests and simulators:**
+  - `node scripts/ads-install.mjs selftest`: every line ok, including the new "template whole" and "base ok";
+  - `node scripts/simulate.mjs`: exit 0, 111 `ok` lines;
+  - `node scripts/simulate-without-prd.mjs`: exit 0.
+
+### Not checked
+
+- **On a device.** Both wiring runs stopped at the release build; no `seen` / `proof` / `stress` / `launch` ran, so no ad was seen on a screen and no crash-free run was proven for 0.53.0. Without a `google-services.json` every id stays `"11"` and no ad renders until seeded or configured (the team's behaviour, kept).
+- iOS (not built on this Mac).
+- `fluttertoast` 10.0.2 with the team's `showToast` on a device: it compiles (analyze, release build); a toast was not seen.
+- The 9b audit agent on the wired app (the wiring runs stopped before step 9b); I3 needs the step-1 before-tests snapshot, which the device stage produces.
+
 ## 0.52.0 — 2026-11-04 — commit f4ef044
 
 **Questions only at the start:** `/app-factory:app-dev-without-prd` asks every question of the run in ONE stop, before the audit, and waits for the answers; after that nothing is asked — not after the audit, not by the PRD writer, not by build-app's contract, never during development. Every later gap gets the option closest to the evidence and the answers and is recorded (`source-app/answers.md`, `DECISIONS.md`, PRD.md Sources). Before: up to 5 stops (start, walk failed, gaps before PRD.md, a gap the report found, contract questions). 8 files besides this entry.

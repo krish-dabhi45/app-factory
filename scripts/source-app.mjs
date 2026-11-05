@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// The audit of an existing app (/app-factory:app-dev-without-prd) — the gate its PRD.md and new theme must pass before
-// /app-factory:build-app builds from them.
+// The audit of an existing app (/app-factory:app-dev-without-prd) — the gate its PRD.md and theme must pass before
+// /app-factory:build-app builds from them. The source app is the user's OWN app (a rebuild / update of it): its theme and
+// its files (icon, images, animations, sounds, fonts) are reused, never replaced by look-alikes.
 //   node source-app.mjs check <project> [--apk] [--no-walk] — fails with every problem listed; --apk: an APK was audited, so
 //                                                    source-app/static.md and walk.md must exist and walk.md must have a
 //                                                    screen; --no-walk: the user chose to go on without the walk
@@ -8,11 +9,14 @@
 //                                                    the source app's palette, measured instead of guessed
 //   node source-app.mjs status <project>          — JSON of what an earlier run left: evidence ids per file (walk 0 = not
 //                                                    walked), PRD.md and its problem count, CONTRACT.md, pubspec.yaml, lib/ .dart files
-//   node source-app.mjs hashes <dir>              — "<sha1> <W>x<H>|- <path>" for every file of an unzipped APK's res/ and
-//                                                    assets/ (not .xml, .arsc, .dex): written to source-app/res-hashes.txt
-//   node source-app.mjs copied <project>          — fails when a file of the new app (assets/, android/app/src/main/res/,
-//                                                    ios/Runner/) is a source-app file: the same bytes, or an image with the
-//                                                    same name stem and the same pixel size (a converted copy)
+//   node source-app.mjs reuse <unzipped apk> <project> — copies the source app's own files into source-app/assets/ (the
+//                                                    launcher icon, raster images at their largest density, res/raw: Lottie
+//                                                    and sounds, fonts, the APK's assets/) and lists each in
+//                                                    source-app/assets.md as "- A<nn> · <kind> · <file> — <size> · from <apk path>"
+//   node source-app.mjs image <project> <slot> <words…> [--next <n>] — an image the source app's files do not have (its photos are in
+//                                                    split APKs that were not given): searched on Openverse (no key; public
+//                                                    domain / CC0 first, else a commercial-use licence), saved as
+//                                                    assets/images/<slot>.png, its source and licence in assets/images/CREDITS.md
 //   node source-app.mjs selftest
 // Evidence files (written by the audit agents): source-app/store.md (always), static.md and walk.md (with an APK).
 // Each seen item gets an id on its own line — "## S07 · <screen>" or "- F03 · <claim>" (S screen, F store/web feature,
@@ -23,21 +27,21 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import crypto from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { decode, encode, blank } from './png.mjs'
 
 export const SECTIONS = ['App', 'Platforms', 'Screens', 'Navigation', 'Fields', 'Features', 'Data and backend', 'Monetisation',
-  'Permissions and notifications', 'Settings', 'Theme', 'Not copied', 'Coverage', 'Sources']
-const NO_TAG = new Set(['Theme', 'Not copied', 'Sources']) // Theme is checked through theme.json; the other two list, not require
+  'Permissions and notifications', 'Settings', 'Theme', 'Reused from the source app', 'Coverage', 'Sources']
+const NO_TAG = new Set(['Theme', 'Reused from the source app', 'Sources']) // Theme is checked through theme.json; the other two list, not require
 const TAG = /\[(walk|store|static|web): [^\]]+\]|\[user\]|\[decided: gap-\d+\]/
 const GUESS = /\bASSUMED\b|\bNOT OBSERVED\b/
-const EVIDENCE = ['store.md', 'static.md', 'walk.md', 'answers.md']
+const EVIDENCE = ['store.md', 'static.md', 'walk.md', 'answers.md', 'assets.md']
 // what a quote is compared with: one space for any run of whitespace or a literal \n (static.md keeps resource strings escaped)
 const norm = (t) => t.replace(/\\n/g, ' ').replace(/\s+/g, ' ')
 const VAGUE = /\betc\b|\band (so on|more)\b|\bvarious\b|\bmisc(ellaneous)?\b|\bTBD\b|\bTODO\b|\bsomething like\b|\bsimilar to\b|\bas needed\b|\bappropriate(ly)?\b|\bmaybe\b|\bprobably\b|\bsomehow\b|\bstuff\b|…|\.\.\./i
-const ID_LINE = /^(?:##|-)\s+([SFDLP]\d{2,})\s+·/
+const ID_LINE = /^(?:##|-)\s+([SFDLPA]\d{2,})\s+·/
 export const ROLES = ['primary', 'onPrimary', 'secondary', 'onSecondary', 'background', 'onBackground', 'surface', 'onSurface', 'error', 'onError']
 const PAIRS = [['primary', 'onPrimary'], ['secondary', 'onSecondary'], ['background', 'onBackground'], ['surface', 'onSurface'], ['error', 'onError']]
 
@@ -47,22 +51,6 @@ export function contrast(a, b) { // WCAG 2.x contrast ratio
   const [x, y] = [L(a), L(b)].sort((p, q) => q - p)
   return (x + 0.05) / (y + 0.05)
 }
-function hsl(h) {
-  const [r, g, b] = rgb(h), max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min
-  if (!d) return [0, 0, l]
-  const s = d / (1 - Math.abs(2 * l - 1))
-  const hue = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
-  return [(hue * 60 + 360) % 360, s, l]
-}
-// A new colour counts as different from the source's when its hue is ≥ 60° away (both clearly coloured), else when it is
-// ≥ 150 apart in 0–255 RGB (a grey, black or white on either side). ponytail: fixed thresholds — tune if a real reskin is judged too close.
-export function distinct(a, b) {
-  const [h1, s1, l1] = hsl(a), [h2, s2, l2] = hsl(b)
-  const coloured = (s, l) => s >= 0.25 && l > 0.1 && l < 0.9
-  if (coloured(s1, l1) && coloured(s2, l2)) return Math.min(Math.abs(h1 - h2), 360 - Math.abs(h1 - h2)) >= 60
-  return Math.hypot(...rgb(a).map((c, i) => (c - rgb(b)[i]) * 255)) >= 150
-}
-
 function themeProblems(t) {
   const bad = [], HEX = /^#[0-9A-Fa-f]{6}$/
   if (!t.source || !HEX.test(t.source.primary || '') || !t.source.evidence) bad.push('theme.json: source.primary (#RRGGBB) and source.evidence (where the source app\'s colour was read) are required')
@@ -71,9 +59,10 @@ function themeProblems(t) {
     const by = Object.fromEntries((t[mode] || []).map((c) => [c.role, c.hex]))
     for (const r of ROLES) if (!HEX.test(by[r] || '')) bad.push(`theme.json ${mode}: role "${r}" needs a #RRGGBB hex`)
     for (const [a, b] of PAIRS) if (HEX.test(by[a] || '') && HEX.test(by[b] || '') && contrast(by[a], by[b]) < 4.5) bad.push(`theme.json ${mode}: ${b} on ${a} is ${contrast(by[a], by[b]).toFixed(2)}:1 — text needs at least 4.5:1 (WCAG AA)`)
-    for (const r of ['primary', 'secondary']) {
+    // the user's own app keeps its own colours: light primary / secondary are the source's, as measured (dark mode its own)
+    if (mode === 'colors') for (const r of ['primary', 'secondary']) {
       const src = t.source && t.source[r]
-      if (HEX.test(src || '') && HEX.test(by[r] || '') && !distinct(by[r], src)) bad.push(`theme.json ${mode}: ${r} ${by[r]} is too close to the source app's ${src} — pick a hue at least 60° away (or ≥ 150 apart in RGB for a grey)`)
+      if (HEX.test(src || '') && HEX.test(by[r] || '') && src.toUpperCase() !== by[r].toUpperCase()) bad.push(`theme.json colors: ${r} ${by[r]} is not the source app's ${src} — the source is the user's own app: its colours are kept`)
     }
   }
   return bad
@@ -146,9 +135,9 @@ export function status(root) {
   // the user chose to go on without the walk, or it was decided after every walk failed (app-dev-without-prd records both there)
   const noWalk = has('source-app/answers.md') && /^(Answer|Decided): Go on without the walk/m.test(fs.readFileSync(f('source-app/answers.md'), 'utf8'))
   const dart = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? dart(path.join(d, e.name)) : e.name.endsWith('.dart') ? 1 : 0), 0) : 0)
-  // parts a static.md from an older version lacks (0.49.0 added layouts, code data and the file hashes)
+  // parts a static.md from an older version lacks (0.49.0 added layouts and code data; 0.54.0 the reusable files)
   const st = apk ? fs.readFileSync(f('source-app/static.md'), 'utf8') : ''
-  const staticMissing = apk ? [[/^## Layouts/m, 'layouts'], [/^## Data in the code/m, 'data']].filter(([r]) => !r.test(st)).map(([, n]) => n).concat(has('source-app/res-hashes.txt') ? [] : ['hashes']) : []
+  const staticMissing = apk ? [[/^## Layouts/m, 'layouts'], [/^## Data in the code/m, 'data']].filter(([r]) => !r.test(st)).map(([, n]) => n).concat(has('source-app/assets.md') ? [] : ['assets']) : []
   return {
     sourceApp: has('source-app'), store: ids('source-app/store.md', 'F'), static: ids('source-app/static.md', 'D'), walk: ids('source-app/walk.md', 'S'),
     prd: has('PRD.md'), prdProblems: has('PRD.md') ? check(root, { apk, noWalk }).length : null, staticMissing, contract: has('CONTRACT.md'), app: APP_FILES.some(has) || fs.readdirSync(root).some((e) => e.endsWith('.xcodeproj')), dartFiles: dart(f('lib')),
@@ -175,34 +164,64 @@ export function imageSize(b) {
   return null
 }
 const files = (d, base = d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(path.join(d, e.name), base) : [path.relative(base, path.join(d, e.name))])) : [])
-const sha1 = (b) => crypto.createHash('sha1').update(b).digest('hex')
 const stem = (f) => path.basename(f).replace(/\.[^.]+$/, '').toLowerCase()
-// names every app has at the platform's fixed sizes (launcher and splash icons): for these only the same bytes count
-const STANDARD = /^(ic_launcher(_round|_foreground|_background|_monochrome)?|launch_?image|launch_background|splash|icon-app-.+|appicon.*)$/
-// The source app's own files, as lines "<sha1> <W>x<H>|- <path>": res/ and assets/ of the unzipped APK (layouts, the
-// resource table and code are not files an app copies).
-export function hashes(dir) {
-  return ['res', 'assets'].flatMap((top) => files(path.join(dir, top), dir)).filter((f) => !/\.(xml|arsc|dex)$/i.test(f)).sort()
-    .map((f) => { const b = fs.readFileSync(path.join(dir, f)), wh = imageSize(b); return `${sha1(b)} ${wh ? wh.join('x') : '-'} ${f}` })
-}
-// A file of the new app that is a source-app file: the same bytes, or an image with the same name stem and pixel size
-// (converted, e.g. france.webp → france.png). The plugin's own template files (the team's ads fonts and layouts) never count.
-// ponytail: name stem + size catches a converted copy that keeps its name; a renamed and resized copy is not caught.
-export function copied(root) {
-  const hf = path.join(root, 'source-app', 'res-hashes.txt')
-  if (!fs.existsSync(hf)) return { skipped: 'source-app/res-hashes.txt missing — no APK files were audited', bad: [] }
-  const src = fs.readFileSync(hf, 'utf8').trim().split('\n').filter(Boolean).map((l) => { const [h, wh, ...p] = l.split(' '); return { h, wh, p: p.join(' ') } })
-  const byHash = new Map(src.map((x) => [x.h, x.p])), bySize = new Map(src.filter((x) => x.wh !== '-').map((x) => [`${stem(x.p)} ${x.wh}`, x.p]))
-  const tpl = new Set(files(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates')).map((f) => sha1(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', f)))))
-  const bad = []
-  for (const top of ['assets', 'android/app/src/main/res', 'ios/Runner']) for (const f of files(path.join(root, top), root)) {
-    const b = fs.readFileSync(path.join(root, f)), h = sha1(b)
-    if (tpl.has(h)) continue
-    const wh = imageSize(b)
-    if (byHash.has(h)) bad.push(`${f} is the source app's ${byHash.get(h)} (same bytes)`)
-    else if (wh && !STANDARD.test(stem(f)) && bySize.has(`${stem(f)} ${wh.join('x')}`)) bad.push(`${f} is the source app's ${bySize.get(`${stem(f)} ${wh.join('x')}`)} converted (same name, ${wh.join('x')} px)`)
+// files an APK carries for its libraries (Android UI kits, ad networks, SDK screens): not the app's own look
+const LIB = /^(abc_|mtrl_|m3_|m3c_|material_|design_|exo_|notification_|common_google_|googleg_|admob_|applovin_|com_facebook_|fb_|tt_|pangle_|bm_|unity_|admost_|adapty_|crop_image_|ucrop_|ad_|icon_ad|mopub_|ironsource_|vungle_|inmobi_|mintegral_|quantum_|ic_mtrl_)/
+const KIND = [[/\.(png|webp|jpe?g|gif)$/i, 'image'], [/\.json$/i, 'animation'], [/\.(wav|mp3|ogg|m4a|aac)$/i, 'sound'], [/\.(ttf|otf)$/i, 'font']]
+// The source app is the user's own: its icon, images, animations, sounds and fonts are copied into source-app/assets/<kind>/
+// for the build, one file per name (the largest density), each listed in source-app/assets.md with an A id the PRD maps to
+// a place in the new app (or "not used" with why). Compiled XML (vectors, layouts) is not a file Flutter can load: left out.
+export function reuse(dir, root) {
+  const best = new Map()
+  const take = (rel, kind) => {
+    const b = fs.readFileSync(path.join(dir, rel)), wh = imageSize(b), area = wh ? wh[0] * wh[1] : b.length, key = `${kind}/${path.basename(rel).toLowerCase()}`
+    if (!best.has(`${kind}/${stem(rel)}`) || area > best.get(`${kind}/${stem(rel)}`).area) best.set(`${kind}/${stem(rel)}`, { rel, kind, wh, area, size: b.length, key })
   }
-  return { bad }
+  for (const rel of files(path.join(dir, 'res'), dir)) {
+    const folder = rel.split('/')[1] || '', st = stem(rel), k = (KIND.find(([r]) => r.test(rel)) || [])[1]
+    if (!k || LIB.test(st)) continue
+    if (/^mipmap/.test(folder) && /^ic_launcher/.test(st) && k === 'image') take(rel, 'icon')
+    else if (/^drawable/.test(folder) && k === 'image') take(rel, 'image')
+    else if (folder === 'raw' && k !== 'image') take(rel, k)
+    else if (folder === 'font' && k === 'font') take(rel, 'font')
+  }
+  for (const rel of files(path.join(dir, 'assets'), dir)) { const k = (KIND.find(([r]) => r.test(rel)) || [])[1]; if (k && !LIB.test(stem(rel))) take(rel, k) }
+  const out = path.join(root, 'source-app', 'assets'); fs.rmSync(out, { recursive: true, force: true })
+  const lines = [...best.values()].sort((x, y) => (x.kind + x.rel).localeCompare(y.kind + y.rel)).map((x, i) => {
+    const to = path.join('source-app', 'assets', x.kind, path.basename(x.rel)); fs.mkdirSync(path.dirname(path.join(root, to)), { recursive: true }); fs.copyFileSync(path.join(dir, x.rel), path.join(root, to))
+    return `- A${String(i + 1).padStart(2, '0')} · ${x.kind} · ${to} — ${x.wh ? `${x.wh.join('x')} px, ` : ''}${x.size} bytes · from ${x.rel}`
+  })
+  fs.writeFileSync(path.join(root, 'source-app', 'assets.md'), `# The source app's own files (reused: it is the user's own app)\n\n${lines.join('\n')}\n`)
+  return lines
+}
+
+// The <skip>-th usable hit (0 = the first): not marked mature, at least minWidth px wide, an https image URL.
+export const pick = (results, skip = 0, minWidth = 600) => (results || []).filter((r) => !r.mature && r.width >= minWidth && /^https:\/\//.test(r.url || ''))[skip] || null
+// An image the source's files do not have: Openverse (api.openverse.org, no key), public domain / CC0 first (no attribution),
+// else a commercial-use licence (attribution required: CREDITS.md says so and the build shows the credits).
+// ponytail: macOS `sips` converts to PNG; on another OS convert with any tool and keep the same file name.
+export async function image(root, slot, query, skip = 0) {
+  if (!/^[a-z0-9_]+$/.test(slot)) throw new Error(`slot "${slot}": use the contract's slot name (a-z, 0-9, _)`)
+  const UA = { 'User-Agent': 'Mozilla/5.0 (Macintosh) app-factory' } // some image hosts answer an HTML page to a request without one
+  for (const [lic, attribution] of [['license=cc0,pdm', false], ['license_type=commercial', true]]) {
+    const res = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&${lic}&page_size=20`, { headers: UA })
+    if (!res.ok) throw new Error(`Openverse answered ${res.status}`)
+    const results = (await res.json()).results
+    // the <skip>-th usable hit; a host that does not give an image (HTML, an error) is passed over for the next hit
+    for (let i = skip, hit; (hit = pick(results, i)); i++) {
+      const img = await fetch(hit.url, { headers: UA }).catch(() => null)
+      if (!img || !img.ok || !/^image\//.test(img.headers.get('content-type') || '')) continue
+      const tmp = path.join(os.tmpdir(), `openverse-${slot}${path.extname(new URL(hit.url).pathname) || '.jpg'}`); fs.writeFileSync(tmp, Buffer.from(await img.arrayBuffer()))
+      const dir = path.join(root, 'assets', 'images'), out = path.join(dir, `${slot}.png`); fs.mkdirSync(dir, { recursive: true })
+      try { execFileSync('sips', ['-s', 'format', 'png', tmp, '--out', out], { stdio: 'ignore' }) } catch { continue } finally { fs.rmSync(tmp, { force: true }) }
+      if (!fs.existsSync(out) || !imageSize(fs.readFileSync(out))) continue
+      const line = `- ${slot}.png — "${hit.title || 'untitled'}" by ${hit.creator || 'unknown'}, ${String(hit.license).toUpperCase()} ${hit.license_version || ''}${attribution ? ' — attribution required' : ''}, ${hit.foreign_landing_url} (search: ${query}${i ? `, result ${i + 1}` : ''})`
+      const cf = path.join(dir, 'CREDITS.md'), old = fs.existsSync(cf) ? fs.readFileSync(cf, 'utf8').split('\n').filter((l) => l && !l.startsWith(`- ${slot}.png `) && !l.startsWith('#')) : []
+      fs.writeFileSync(cf, `# Images from Openverse (source-app.mjs image)\n\n${[...old, line].sort().join('\n')}\n`)
+      return line
+    }
+  }
+  return null
 }
 
 export function palette(files) {
@@ -223,7 +242,7 @@ function selftest() {
   w('source-app/static.md', '- D01 · com.revenuecat — in-app subscriptions\n')
   w('source-app/walk.md', '## S01 · Home\nscreenshot: source-app/screens/S01-home.png\n')
   w('source-app/screens/S01-home.png', '')
-  const theme = { source: { primary: '#1976D2', evidence: 'S01 app bar' }, colors: [['primary', '#C2185B'], ['onPrimary', '#FFFFFF'], ['secondary', '#00695C'], ['onSecondary', '#FFFFFF'], ['background', '#FFFFFF'], ['onBackground', '#1C1B1F'], ['surface', '#F7F2F4'], ['onSurface', '#1C1B1F'], ['error', '#B3261E'], ['onError', '#FFFFFF']].map(([role, hex]) => ({ role, hex })) }
+  const theme = { source: { primary: '#1976D2', evidence: 'S01 app bar' }, colors: [['primary', '#1976D2'], ['onPrimary', '#FFFFFF'], ['secondary', '#00695C'], ['onSecondary', '#FFFFFF'], ['background', '#FFFFFF'], ['onBackground', '#1C1B1F'], ['surface', '#F7F2F4'], ['onSurface', '#1C1B1F'], ['error', '#B3261E'], ['onError', '#FFFFFF']].map(([role, hex]) => ({ role, hex })) }
   w('source-app/theme.json', JSON.stringify(theme))
   const body = (extra = '') => SECTIONS.map((s) => `## ${s}\n${s === 'App' ? '- Name: **Nova** [user]\n' : ''}${s === 'Theme' ? theme.colors.map((c) => `| ${c.role} | ${c.hex} |`).join('\n') : s === 'Coverage' ? '- S01 F01 D01 P01 all built [walk: S01]' : `- ${s} line [walk: S01]${s === 'Features' ? extra : ''}`}\n`).join('\n')
   w('PRD.md', body())
@@ -259,10 +278,10 @@ function selftest() {
   w('PRD.md', body())
   w('source-app/theme.json', JSON.stringify({ ...theme, colors: theme.colors.map((c) => (c.role === 'primary' ? { ...c, hex: '#1E88E5' } : c.role === 'onSurface' ? { ...c, hex: '#EEEEEE' } : c)) }))
   const b3 = check(tmp, { apk: true })
-  assert.ok(b3.some((x) => /too close/.test(x)), 'a primary of the same hue as the source is caught')
+  assert.ok(b3.some((x) => /#1E88E5 is not the source app's #1976D2/.test(x)), 'the user\'s own app keeps its colours: another primary is caught')
   assert.ok(b3.some((x) => /onSurface on surface/.test(x)), 'low contrast is caught')
   w('source-app/theme.json', JSON.stringify(theme))
-  assert.deepEqual(status(tmp), { sourceApp: true, store: 1, static: 1, walk: 1, prd: true, prdProblems: 0, staticMissing: ['layouts', 'data', 'hashes'], contract: false, app: false, dartFiles: 0 }, 'status: the evidence and a ready PRD are found; an older static.md lacks layouts, code data and hashes')
+  assert.deepEqual(status(tmp), { sourceApp: true, store: 1, static: 1, walk: 1, prd: true, prdProblems: 0, staticMissing: ['layouts', 'data', 'assets'], contract: false, app: false, dartFiles: 0 }, 'status: the evidence and a ready PRD are found; an older static.md lacks layouts, code data and the reusable files')
   w('source-app/walk.md', '# Walk\nNOT OBSERVED: INSTALL_FAILED_MISSING_SPLIT\n')
   assert.equal(status(tmp).walk, 0, 'status: a walk with no screen counts as not done')
   const noScreen = status(tmp).prdProblems
@@ -272,24 +291,23 @@ function selftest() {
   for (const f of ['settings.gradle.kts', 'Demo.xcodeproj']) { fs.mkdirSync(path.join(tmp, 'x'), { recursive: true }); fs.writeFileSync(path.join(tmp, 'x', f), ''); assert.equal(status(path.join(tmp, 'x')).app, true, `status: ${f} is an app project`); fs.rmSync(path.join(tmp, 'x'), { recursive: true }) }
   fs.rmSync(path.join(tmp, 'source-app', 'walk.md'))
   assert.ok(!check(tmp).some((x) => /walk\.md missing/.test(x)) && check(tmp, { apk: true }).some((x) => /walk\.md missing/.test(x)), 'walk.md is required only with an APK')
-  assert.ok(distinct('#000000', '#C2185B') && !distinct('#FFFFFF', '#F5F5F5'), 'greys compare by RGB distance')
   assert.ok(Math.abs(contrast('#FFFFFF', '#000000') - 21) < 0.01)
   const img = blank(10, 10, [255, 255, 255, 255]); for (let i = 0; i < 30 * 4; i += 4) img.data.set([0x19, 0x76, 0xD2, 255], i)
   fs.writeFileSync(path.join(tmp, 'p.png'), encode(img))
-  // G6: copied source files — same bytes, or a converted image (same stem and size); launcher names only by bytes
+  // the source app's own files are reused: one per name at its largest density; library files and compiled XML left out
   const webp = Buffer.alloc(32); webp.write('RIFF', 0); webp.write('WEBP', 8); webp.write('VP8 ', 12); webp.writeUInt16LE(10, 26); webp.writeUInt16LE(10, 28)
   assert.deepEqual(imageSize(webp), [10, 10]); assert.deepEqual(imageSize(encode(img)), [10, 10])
-  const apkDir = path.join(tmp, 'apk'); fs.mkdirSync(path.join(apkDir, 'res', 'drawable'), { recursive: true }); fs.mkdirSync(path.join(apkDir, 'res', 'mipmap-mdpi'), { recursive: true })
-  fs.writeFileSync(path.join(apkDir, 'res', 'drawable', 'flag.webp'), webp); fs.writeFileSync(path.join(apkDir, 'res', 'drawable', 'logo.png'), encode(img)); fs.writeFileSync(path.join(apkDir, 'res', 'drawable', 'a.xml'), '<x/>')
-  fs.writeFileSync(path.join(apkDir, 'res', 'mipmap-mdpi', 'ic_launcher.webp'), webp)
-  w('source-app/res-hashes.txt', hashes(apkDir).join('\n'))
-  assert.equal(hashes(apkDir).length, 3, 'hashes: layouts (.xml) are left out')
-  fs.mkdirSync(path.join(tmp, 'assets', 'img'), { recursive: true }); fs.mkdirSync(path.join(tmp, 'android', 'app', 'src', 'main', 'res', 'mipmap-mdpi'), { recursive: true })
-  fs.writeFileSync(path.join(tmp, 'assets', 'img', 'flag.png'), encode(blank(10, 10, [5, 5, 5, 255]))); fs.writeFileSync(path.join(tmp, 'assets', 'img', 'new.png'), encode(blank(10, 10, [1, 2, 3, 255])))
-  fs.writeFileSync(path.join(tmp, 'assets', 'img', 'brand.png'), encode(img)) // same bytes as the source's logo.png
-  fs.writeFileSync(path.join(tmp, 'android', 'app', 'src', 'main', 'res', 'mipmap-mdpi', 'ic_launcher.png'), encode(blank(10, 10, [9, 9, 9, 255])))
-  const cp = copied(tmp).bad
-  assert.ok(cp.some((x) => /flag\.png .*flag\.webp converted/.test(x)) && cp.some((x) => /brand\.png .*logo\.png \(same bytes\)/.test(x)) && !cp.some((x) => /new\.png|ic_launcher/.test(x)) && cp.length === 2, `copied: a converted and a byte copy caught; a new image and a launcher icon of the platform size pass (${cp.join('; ')})`)
+  const apkDir = path.join(tmp, 'apk'), wa = (f, b) => { fs.mkdirSync(path.dirname(path.join(apkDir, f)), { recursive: true }); fs.writeFileSync(path.join(apkDir, f), b) }
+  wa('res/drawable-nodpi-v4/flag.webp', webp); wa('res/drawable/ad_close.png', encode(img)); wa('res/drawable/a.xml', '<x/>')
+  wa('res/drawable-mdpi-v4/photo.png', encode(blank(5, 5, [1, 2, 3, 255]))); wa('res/drawable-xxhdpi-v4/photo.png', encode(blank(20, 20, [1, 2, 3, 255])))
+  wa('res/mipmap-mdpi-v4/ic_launcher.webp', webp); wa('res/raw/processing.json', '{"v":"5"}'); wa('res/raw/correct_answer.wav', 'RIFF'); wa('res/raw/applovin_consent.json', '{}'); wa('res/font/karla.ttf', 'ttf')
+  const ru = reuse(apkDir, tmp)
+  assert.deepEqual(ru.map((l) => l.replace(/ — .*/, '')), ['- A01 · animation · source-app/assets/animation/processing.json', '- A02 · font · source-app/assets/font/karla.ttf', '- A03 · icon · source-app/assets/icon/ic_launcher.webp', '- A04 · image · source-app/assets/image/flag.webp', '- A05 · image · source-app/assets/image/photo.png', '- A06 · sound · source-app/assets/sound/correct_answer.wav'], `reuse: ${ru.join('; ')}`)
+  assert.match(ru[4], /20x20 px, .* from res\/drawable-xxhdpi-v4\/photo\.png$/, 'the largest density is kept')
+  assert.ok(check(tmp, { apk: true }).some((x) => /A01 \(seen/.test(x)), 'every reusable file must be placed in PRD.md (or listed as not used)')
+  fs.rmSync(path.join(tmp, 'source-app', 'assets.md')); fs.rmSync(path.join(tmp, 'source-app', 'assets'), { recursive: true })
+  const hits = [{ mature: true, width: 900, url: 'https://a' }, { width: 300, url: 'https://b' }, { width: 800, url: 'http://c' }, { width: 800, url: 'https://d' }, { width: 700, url: 'https://e' }]
+  assert.equal(pick(hits).url, 'https://d', 'pick: not mature, wide enough, https'); assert.equal(pick(hits, 1).url, 'https://e', 'pick: --next 1 takes the next usable hit'); assert.equal(pick(hits, 2), null)
   assert.deepEqual(palette([path.join(tmp, 'p.png')]), ['#FFFFFF 70.0%', '#1976D2 30.0%'])
   fs.rmSync(tmp, { recursive: true })
   return 'selftest ok'
@@ -301,15 +319,16 @@ if (direct) {
   if (cmd === 'selftest') console.log(selftest())
   else if (cmd === 'palette' && root) console.log(palette([root, ...a]).join('\n'))
   else if (cmd === 'status' && root) console.log(JSON.stringify(status(path.resolve(root))))
-  else if (cmd === 'hashes' && root) console.log(hashes(path.resolve(root)).join('\n'))
-  else if (cmd === 'copied' && root) {
-    const r = copied(path.resolve(root))
-    if (r.bad.length) { console.error(`SOURCE FILES COPIED (${r.bad.length}) — the new app may not use the source app's files (PRD.md "Not copied"); replace each:\n${r.bad.join('\n')}`); process.exit(1) }
-    console.log(r.skipped || 'no source-app file in the new app')
+  else if (cmd === 'reuse' && root && a[0]) console.log(reuse(path.resolve(root), path.resolve(a[0])).join('\n'))
+  else if (cmd === 'image' && root && a.length >= 2) {
+    const n = a.indexOf('--next'), skip = n < 0 ? 0 : Number(a[n + 1]) || 0, words = (n < 0 ? a : a.filter((_, i) => i !== n && i !== n + 1)).slice(1)
+    const line = await image(path.resolve(root), a[0], words.join(' '), skip)
+    if (!line) { console.error(`no image found for "${words.join(' ')}"${skip ? ` (result ${skip + 1})` : ''}: search again with fewer, broader words (the subject only, e.g. "toaster")`); process.exit(1) }
+    console.log(line)
   }
   else if (cmd === 'check' && root) {
     const bad = check(path.resolve(root), { apk: a.includes('--apk'), noWalk: a.includes('--no-walk') })
     if (bad.length) { console.error(`AUDIT NOT READY (${bad.length} problem(s)) — fix each and run check again:\n${bad.join('\n')}`); process.exit(1) }
-    console.log('audit ready: PRD.md cites a source for every requirement, every seen screen, feature, dependency and screenshot is in it, and the new theme is distinct and readable')
-  } else { console.error('usage: source-app.mjs check <project> [--apk] [--no-walk] | status <project> | hashes <unzipped apk dir> | copied <project> | palette <png...> | selftest'); process.exit(2) }
+    console.log('audit ready: PRD.md cites a source for every requirement, every seen screen, feature, dependency and screenshot is in it, and the theme is the source app\'s own and readable')
+  } else { console.error('usage: source-app.mjs check <project> [--apk] [--no-walk] | status <project> | reuse <unzipped apk dir> <project> | image <project> <slot> <words…> [--next <n>] | palette <png...> | selftest'); process.exit(2) }
 }

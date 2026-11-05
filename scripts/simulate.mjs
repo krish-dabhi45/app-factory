@@ -21,7 +21,7 @@ async function sim(name, args, over = {}) {
     if (label === 'senior QA setup') return { appPath: 'a', bundleId: 'x' }
     if (label.startsWith('senior QA')) return { scenarios: ['1'], filed: [], ...st() }
     if (label.startsWith('final audit')) return { verdict: 'pass', passing: [], fixed: [], removed: [], ...st() }
-    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, copiedOk: true, output: 'ok' }
+    if (label === 'final checks') return { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, output: 'ok' }
     if (label.startsWith('lessons')) return { timing: 'ended', cleanup: 'cleanup: freed 1 MB' }
     return null
   }
@@ -122,7 +122,7 @@ show(x); check(x.res.stage !== 'figma' && x.calls.includes('contract'), 'no ques
 x = await sim('build: parallel, clean run', { stage: 'build' })
 show(x)
 check(x.calls.indexOf('interface') < x.calls.indexOf('logic: items'), 'interface before the groups')
-check(/If CONTRACT\.md section 9 \(Ads\) lists placements, install the team's ads \+ Remote Config implementation only this way: `node "[^"]+\/scripts\/ads-install\.mjs"[^.]*\.[\s\S]*nothing of your own/.test(x.prompts.interface) && !/has an "Ads" section/.test(Object.values(x.prompts).join()), 'the interface step installs the team\'s ads change and wires the rest from RECIPE.md, when section 9 lists placements (a "Not in scope" section 9 does not count)')
+check(/If CONTRACT\.md section 9 \(Ads\) lists placements, install the team's ads \+ Remote Config implementation only this way: `node "[^"]+\/scripts\/ads-install\.mjs"[^.]*\.[\s\S]*templates\/flutter\/ads\/after\/\), nothing but the ADAPTED kinds of section 2 step 4/.test(x.prompts.interface) && !/has an "Ads" section/.test(Object.values(x.prompts).join()), 'the interface step installs the team\'s ads change and wires the rest with the team\'s ad lines (RECIPE.md, read in after/) and ADAPTED lines only, when section 9 lists placements (a "Not in scope" section 9 does not count)')
 check(['logic: items', 'ui: items', 'tests: items'].every((l) => x.calls.includes(l)), 'logic ∥ UI ∥ tests per group')
 check(x.calls.filter((c) => c.startsWith('test r1 iOS runner')).length === 3, '3 iOS runners (4000 MB free)')
 check(x.calls.includes('test r1 Android runner'), 'Android runner')
@@ -225,6 +225,7 @@ x = await sim('build in a folder that already has the app: continues from it', {
 show(x)
 check(!x.calls.includes('interface') && !x.calls.some((c) => /: items$/.test(c)) && x.calls.includes('logic: settings'), 'shared layer kept (no interface step); the group whose criteria pass is not built again; the rest is')
 check(/Build only AC2, from the files already here/.test(x.prompts['logic: settings']) && x.logs.some((l) => /group items: every criterion/.test(l)) && bad(x).length === 0, 'the builders extend the existing files; prompts clean')
+check(/a faked reply of a provided key is not proof/.test(x.prompts['existing work']), 'existing work: a test that fakes a provided key\'s API does not count as done')
 x = await sim('build in a new folder: as before', { stage: 'build' }, { 'existing work': { existing: false, sharedLayer: false, done: [], failing: [], missing: [] } })
 check(x.calls.includes('interface') && x.calls.includes('logic: items') && !/files already here/.test(x.prompts['logic: items']), 'no existing work: interface step and every group run')
 x = await sim('build in a folder with code in another structure: kept, not replaced', { stage: 'build' }, { 'existing work': { existing: true, sharedLayer: false, analyzeErrors: 2, done: [], failing: [], missing: ['AC1', 'AC2'], note: '9 .dart files, 2 errors, no test/ folder' } })
@@ -243,8 +244,12 @@ x = await sim('ads already proven by an earlier run → not redone', { stage: 'b
 check(!x.calls.includes('ads audit') && !x.calls.includes('ads commit') && x.res.done === true, 'a proven "app-factory: ads" commit is kept')
 x = await sim('ads never pass → not done', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: { ...adsDone, proofOk: false }, 'ads r2': { ...adsDone, proofOk: false }, 'ads r3': { ...adsDone, proofOk: false }, 'ads audit': { rows: 1, fails: [] }, 'ads audit r2': { rows: 1, fails: [] }, 'ads audit r3': { rows: 1, fails: [] } })
 check(x.res.done === false && x.calls.includes('devices') && x.logs.some((l) => /ads not done after 3 round/.test(l)), 'ads unproven after 3 rounds: testing still runs, the run is not done')
-x = await sim('a source-app file in the new app → not done', { stage: 'build' }, { 'final checks': { designOk: true, assetsOk: true, secretsOk: true, releaseOk: true, copiedOk: false, output: 'SOURCE FILES COPIED (1)' } })
-check(x.res.done === false && /source-app\.mjs" copied \./.test(x.prompts['final checks']), 'the copy check runs at the end and blocks done')
+x = await sim('final checks: the user\'s own Run gets the keys; no copy check (the source app is the user\'s own)', { stage: 'build' }, {})
+check(/secret runconfig/.test(x.prompts['final checks']) && !/source-app\.mjs" copied/.test(x.prompts['final checks']) && x.res.done === true, 'final checks refresh the run configurations (secret runconfig) and never fail on the source app\'s files')
+check(/ids --fix/.test(x.prompts['final checks']) && /team's apps/.test(x.prompts['final checks']), 'final checks set the app ids as the team\'s apps have them (namespace = applicationId, MainActivity in that package)')
+check(/secret runconfig/.test(x.prompts.interface || '') && /real-answers\.md/.test(x.prompts['integrate + gate'] || '') && /source-app\.mjs" image \. <slot>/.test(x.prompts['integrate + gate'] || ''), 'run configurations at setup; the integrator checks real answers (L14) and fetches missing images')
+x = await sim('no Firebase files → ads wired and audited once, blocked, no device rounds', { stage: 'build' }, { 'setup (approved contract)': withAds, ads: { ...adsDone, proofOk: false, noFirebase: true }, 'ads audit': { rows: 8, fails: [] } })
+check(x.calls.includes('ads commit') && !x.calls.includes('ads r2') && x.logs.some((l) => /no Firebase files/.test(l)) && /AdMob starts only after Firebase/.test(x.prompts.ads), 'no Firebase files: one round, committed, ads criteria blocked with the reason — never 3 rounds')
 
 const RA = { changed: ['AC1'], added: [], removed: ['AC9'] }
 x = await sim('CONTRACT.md already here: re-audited against PRD.md, not left unchanged', { noFigma: true }, { contract: { claimed: true, projectDir: '/p/app', existingContract: true, reaudit: RA, features: [], groups: [], assumed: [], questions: [] } })

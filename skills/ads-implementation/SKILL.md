@@ -1,19 +1,37 @@
 ---
 name: ads-implementation
-description: Adds the team's ads + Remote Config implementation (skills/flutter-ads — the team's own change to its AI PPT app, applied by ads-install.mjs) to a Flutter app that is already built, in the folder open in this window — lists the ad slots the app prepared, applies the team's change (whole files where the app's are the team's base, a 3-way merge elsewhere), wires the rest from RECIPE.md hunk by hunk, verifies on a device, audits every change against the team's diff and reports. Use only when the user types /app-factory:ads-implementation.
+description: Adds the team's ads + Remote Config implementation (skills/flutter-ads — the team's own change to its AI PPT app, stored whole in the plugin) to any Flutter app that is already built, in the folder open in this window — lists the ad slots the app prepared, installs the team's ads files and helpers, puts the team's ad lines into the app's own screens, launch and purchase code (its structure kept), verifies on a device, audits every change against the team's files and reports. Never asks and never stops for a missing piece. Use only when the user types /app-factory:ads-implementation.
 disable-model-invocation: true
 ---
 
 # Add ads + Remote Config to an existing Flutter app
 
-Read `${CLAUDE_PLUGIN_ROOT}/skills/flutter-ads/SKILL.md` in full before step 2. Its rule is this command's rule: **the team's change, nothing else** — every ads line comes from the team's change (`${CLAUDE_PLUGIN_ROOT}/templates/flutter/ads/RECIPE.md`, PPT file:line) or is the app's own ad code switched on from a comment. Never IPTV_two, never a line of your own, never a fix of the team's code. This command adds ads and nothing else: a bug found on the way is reported, not fixed.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/flutter-ads/SKILL.md` in full before step 2. Its rule is this command's rule: **the team's implementation, in the app's structure.**
+- Every ad line is the team's, from `${CLAUDE_PLUGIN_ROOT}/templates/flutter/ads/` (`after/<file>` at the line `RECIPE.md` lists), or is the app's own ad code switched on from a comment.
+- The app's screens, launch, navigation, state and purchase code stay the app's.
+- The only lines written for the app are the ADAPTED lines of flutter-ads section 2 step 4, each listed.
+
+Never IPTV_two, never a fix of the team's code. This command adds ads and nothing else: a bug found on the way is reported, not fixed. Everything it needs is in the plugin, so a folder on another Mac is never needed.
+
+**No question and no stop after step 1.** A gap is decided by flutter-ads section 2 and written in the plan:
+- a helper is copied from `base/`;
+- a team screen with no counterpart in the app is `--no-screen`;
+- a difference in the app's structure is handled by an ADAPTED line.
 
 ## 1. Check the folder and the device — stop at the first failure and say why
 
 - `pubspec.yaml` with `flutter:` and an `android/` or `ios/` folder. Otherwise: "Not a Flutter app."
-- A git repository with nothing uncommitted (`git status --short` prints nothing). Uncommitted changes → stop: "Commit or stash your changes first, so this change is one commit you can revert." No git repository → say no `ADS_CHANGES.md` can be made and the change cannot be reverted, and ask whether to go on.
-- Earlier ads work by app-factory is undone first: `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" reset "$(pwd)"` — it reverts every `app-factory: ads…` commit and removes the files an earlier app-factory version installed (its own names: `lib/ads/app_variable.dart`, `remote_config.json`, `lib/premium_core/` …) only when the app's first commit does not have them. **It never removes a file the app had.** Exit 1 → stop and quote it. Record `git rev-parse --short HEAD`: `<base>` of steps 8–9.
+- The commit to start from: `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" base "$(pwd)"`.
+  - **No git repository:** it makes one here (local, no remote) with the app as it is in one commit, and leaves build output out through `.git/info/exclude`, so no app file is written. Say so in the report.
+  - **Uncommitted changes:** it exits 1. Stop: "Commit or stash your changes first, so this change is one commit you can revert."
+- Earlier ads work by app-factory is undone first: `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" reset "$(pwd)"`.
+  - It reverts every `app-factory: ads…` commit.
+  - It removes the files an earlier app-factory version installed (its own names: `lib/ads/app_variable.dart`, `remote_config.json`, the `lib/premium_core/` folder), and only when the app's first commit does not have them. **It never removes a file the app had.**
+  - Exit 1 → stop and quote it.
+
+  Then record `git rev-parse --short HEAD`: this is `<base>` for steps 8–9.
 - The app's tests before anything changes: `"<flutter>" test -j 4 -r failures-only --file-reporter json:.dart_tool/ads_tests_before.json`. Quote the result line; a test failing here is reported, not fixed.
+- **The Firebase files:** `android/app/google-services.json` (and `ios/Runner/GoogleService-Info.plist` when iOS is built). Missing → no ad can show on any device: the team's code starts AdMob and registers the native ads only after Firebase starts (flutter-ads section 1, `ads_splash_utils.dart:105`, `:288`, `:292` → `:471`). Do steps 2–7 and 9 (the wiring is installed, checked and audited), skip step 8's device walk, and report: "Ads not provable on a device until the Firebase files are added." Never three rounds of trying. With them, the owner's AdMob ids missing → Google's test ids (the installer writes them): every step runs with them.
 - A device, picked without asking: `node "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline.mjs" devices pick android` (else `ios`). Use its `serial` / `udid` from here on; put its `skipped` line in the report. Android: `pipeline.mjs maestro-install` once.
 
 ## 2. What the app already has — read, change nothing
@@ -24,7 +42,16 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/flutter-ads/SKILL.md` in full before step 2. 
 
 ## 3. The plan — a table, nothing in it of your own
 
-One row per RECIPE.md hunk: team file:line | the app's file (flutter-ads section 2's job table) | done by the installer / by hand / no such screen (`--no-screen`). Then one row per slot of step 2 the recipe does not cover. Nothing else. Do not ask the user about placements.
+One row per team ad line in RECIPE.md's "The team's ad lines" lists, and one per hunk of a non-Dart file. Columns:
+- team file:line;
+- the app's file:line, from flutter-ads section 2's job table and its launch rule;
+- how it is done: by the installer / by hand / no such screen (`--no-screen`).
+
+Then:
+- one row per slot of step 2 that the recipe does not cover;
+- one row per ADAPTED line (flutter-ads section 2 step 4): the team file:line it serves, the kind, and the fact about the app that needs it.
+
+Nothing else. Do not ask the user about placements.
 
 ## 4. Install
 
@@ -38,8 +65,12 @@ Quote its lines (flutter-ads section 3 says what each does). `NOT DONE` lines ar
 
 flutter-ads section 2, exactly:
 1. **The app's slots.** Remove the comment markers around the app's ad code and nothing else, and add the imports it needs, using the app's own paths.
-2. **Each NOT DONE file, RECIPE.md section by section.** Find the app's file with the same job. Each hunk's `+` lines go in as the team wrote them, at the same place relative to the same code; only a name of the team's app that the app lacks is replaced with the app's own. A `-` line is removed only where the app has the same line, noted for `--slot-edits <file:line at base>`; where the app's line is the same expression with its own value (`width: sw * 0.9` where the team had `width: sw`), the team's `+` line goes in with the app's value in the place of the team's old one (`… ? sw * 0.68 : sw * 0.9`), also noted. A team file the app has nothing for is noted for `--no-screen <team file>`.
-3. **No line of your own.** Not even where the team's code looks wrong: the PPT intro hides Continue while the intro native is on and shows its own Next/Done, and both go in as the team has them.
+2. **Each NOT DONE file, RECIPE.md section by section.** Follow flutter-ads section 2 step 3:
+   - find the app's code with the same job (the launch rule for `splash_screen.dart`);
+   - put in each of the team's ad lines as the team wrote it, from `templates/flutter/ads/after/<file>`, at the same place relative to the same code;
+   - replace only a name of the team's app that the app lacks;
+   - note `--slot-edits` and `--no-screen` as that step says.
+3. **Only the team's lines and the ADAPTED kinds** of flutter-ads section 2 step 4, each one in the plan. This holds even where the team's code looks wrong: the PPT intro hides Continue while the intro native is on and shows its own Next/Done, and both go in as the team has them.
 4. **Keep each file's line endings.**
 5. Then run `"<flutter>" analyze` and fix only what the ads lines broke.
 
@@ -55,11 +86,14 @@ Per criterion one widget test named "ACn …" that the ad widget of its row is o
 
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" verify "$(pwd)" <base> [--slot-edits <file:line,…>] [--no-screen <team file,…>]` (Bash timeout 600000): analyze (errors fail; a warning fails only in a line the ads work wrote — one in a file it did not touch is the app's own, one in a line of the team's code is the team's, both listed; infos are listed), the whole test suite (an app with no tests passes it) (a test that passed in step 1 and fails now was broken by the wiring: fix the wiring, never the test), the debug builds, then step 9's report. Then on the device of step 1, `flutter run -d <id>` and each row of the table with a screenshot:
 - a full-screen ad: Android `adb -s <id> shell dumpsys activity activities | grep topResumedActivity` = `com.google.android.gms.ads.AdActivity`; the log (`showLog`) has `onAdImpression loadInterSplash` for the splash interstitial;
-- the device has no `google-services.json` values → every id is `"11"`: seed the last online launch instead — debug build, `adb -s <id> shell run-as <applicationId>` writes `shared_prefs/FlutterSharedPreferences.xml` with `flutter.<key>` = the `config.json` values (ints as `<long>`), then launch;
+- the app's Firebase project has no Remote Config value under its parameter yet → every id is `"11"`: seed the last online launch instead (Google's test ids from `config.json`) — debug build, `adb -s <id> shell run-as <applicationId>` writes `shared_prefs/FlutterSharedPreferences.xml` with `flutter.<key>` = the `config.json` values (ints as `<long>`), then launch;
 - first launch: splash interstitial → the intro as the team's (PPT: with `nativeIntroBig` on, the big native under the text and Next / Done at the top right, no Continue), every intro page whole (nothing drawn over the native or cut off) → Done → intro app open → Home; the home native in its slot; a home feature tap → "Loading..." → interstitial, Back, next tap → interstitial; each banner screen; the reward action → the rewarded ad, then the action; Settings' privacy row where consent requires it; Home key, ~10 s, reopen → app open ad;
 - on every screenshot nothing of the app covers an ad;
 - **no crash, enforced by the tool** (flutter-ads section 6), not by looking: the walk starts with `ads-install.mjs launch "$(pwd)" <serial> build/app/outputs/flutter-apk/app-debug.apk` (clears the app's data, clears the logs, starts it, watches it 30 s) and every `seen` re-checks the crash buffer, the process id, ANRs and uncaught exceptions in the ad code. A relaunch in the middle of the walk is only `launch … --keep-data`; a hand-made `am start` changes the pid and is reported as a crash;
-- **release, then stress on it:** `flutter build apk --release` (stop the emulator and the Gradle daemons first on a small Mac), `ads-install.mjs launch "$(pwd)" <serial> build/app/outputs/flutter-apk/app-release.apk` (R8 and the release engine are where the earlier launch crash was), then `ads-install.mjs stress "$(pwd)" <serial> 600`: 600 random touches, drags and app switches (monkey, seed 1, no system keys: a device with no physical keys makes monkey exit with -5 otherwise). `stress` runs on the release build because that is what ships: on a debug build in a 2 GB emulator the app ANRs under monkey at 108 % CPU with 22,000 page faults in 10 s, which says little about a user's phone. It FAILS on a crash, an ANR or a monkey abort, keeps monkey's last 150 events in `.dart_tool/ads_stress.log`, and an ANR is diagnosed with `adb shell dumpsys dropbox --print data_app_anr` (the main thread's stack and the CPU per process). It can press anything the app has, including the app's own server calls: a test device only. `proof` needs both PASS on the final code.
+- **release, then stress on it:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" release "$(pwd)"` (stop the emulator and the Gradle daemons first on a small Mac).
+  - It runs `flutter build apk --release`, signed with this Mac's debug key through Android Gradle's injected signing. The app's own release key is often only on its owner's Mac, and the build then fails with "Keystore file … not found". A release signed with another key than the debug build on the device would also fail `adb install -r`.
+  - The app's signing config is not touched, and this build is for the checks only.
+  - Then `ads-install.mjs launch "$(pwd)" <serial> build/app/outputs/flutter-apk/app-release.apk` (R8 and the release engine are where the earlier launch crash was), then `ads-install.mjs stress "$(pwd)" <serial> 600`: 600 random touches, drags and app switches (monkey, seed 1, no system keys: a device with no physical keys makes monkey exit with -5 otherwise). `stress` runs on the release build because that is what ships: on a debug build in a 2 GB emulator the app ANRs under monkey at 108 % CPU with 22,000 page faults in 10 s, which says little about a user's phone. It FAILS on a crash, an ANR or a monkey abort, keeps monkey's last 150 events in `.dart_tool/ads_stress.log`, and an ANR is diagnosed with `adb shell dumpsys dropbox --print data_app_anr` (the main thread's stack and the CPU per process). It can press anything the app has, including the app's own server calls: a test device only. `proof` needs both PASS on the final code.
 
 A crash found by `launch`, `seen` or `stress` is fixed in the wiring, or reported with its log lines when it is in the team's own code: the log line with its file:line is quoted, the cause is found from the code, the fix is a named exact replacement like flutter-ads' F1–F4 and only that, never a guard that hides the error. Every record is for the code it was made on: after a fix `proof` shows every earlier PASS as STALE, so the walk, `stress` and the release launch are done again.
 **Every ad seen** (flutter-ads section 6), not optional:
@@ -84,10 +118,30 @@ It writes `ADS_CHANGES.md` from git (never edit it, never write it yourself): ev
 
 Start an agent (Agent tool, general-purpose) that changes nothing, with this task:
 
-> Audit the ads work in `<app path>`. Read `ADS_CHANGES.md` (every diff since `<base>`), `${CLAUDE_PLUGIN_ROOT}/templates/flutter/ads/RECIPE.md` (the team's change, with the team's file:line in `/Users/mach/testing/ai_ppt_generater`) and the plan table (pasted below). For every hunk in the app's files write one row: file:line | what changed | its source, which is the RECIPE.md hunk it applies (team file:line) or the app's slot it switches on (file:line at `<base>`: `git show <base>:<file>`) | PASS or FAIL. Open the source and compare: FAIL when the hunk has no source; differs from its source (another condition, value, size, key, widget, callback, position, order) other than a team-app name replaced with the app's own name for the same thing (say which); adds a line the team's hunk does not have; removes an app line the team's hunk does not remove; or a recipe hunk for a file the app has is missing (a plan row with no hunk). A file the installer wrote whole as the team's (its report line "the team's file") is one PASS row after `cmp` with the team's file, with the app's names. Change nothing. Return the table and the FAIL rows.
+> Audit the ads work in `<app path>`. Read:
+> - `ADS_CHANGES.md` (every diff since `<base>`);
+> - `${CLAUDE_PLUGIN_ROOT}/templates/flutter/ads/RECIPE.md` (the team's change and the team's ad lines, with line numbers in the team's files);
+> - the team's files themselves, `${CLAUDE_PLUGIN_ROOT}/templates/flutter/ads/after/<file>` and `base/<file>`;
+> - the plan table (pasted below).
+>
+> For every hunk in the app's files, write one row: file:line | what changed | its source | PASS or FAIL. The source is one of:
+> - the team's line it puts in (team file:line);
+> - the app's slot it switches on (file:line at `<base>`: `git show <base>:<file>`);
+> - the plan's ADAPTED row it implements.
+>
+> Open the source and compare. FAIL when the hunk:
+> - has no source;
+> - differs from the team's line (another condition, value, size, key, widget, callback, position or order), other than a team-app name replaced with the app's own name for the same thing (say which);
+> - adds a line that is neither the team's nor a planned ADAPTED line;
+> - is an ADAPTED line of a kind that flutter-ads section 2 step 4 does not list, or whose stated fact about the app is not true in the app's code;
+> - removes or changes an app line that no team hunk replaces.
+>
+> Also FAIL a plan row that has no hunk.
+>
+> A file the installer wrote whole as the team's (its report line says "the team's") is one PASS row after `cmp` with the template file, with the app's names. Change nothing. Return the table and the FAIL rows.
 
 Every FAIL is fixed, then steps 8, 9 and 9b run again until 9b has no FAIL. Then, in an app-factory project: `git add -A && git -c user.name=app-factory -c user.email=app-factory@localhost commit -q -m "app-factory: ads"` — local only, never push; elsewhere leave it uncommitted and list the files.
 
 ## 10. Report to the user, in this order
 
-The slots found (step 2) and the plan table with each row's source; `ADS_CHANGES.md`'s Checks section, quoted; the 9b table (every row) and what each FAIL fix changed; each step-8 result line, the `proof` lines (every placement PASS with its screenshot); what is not verified and why (iOS on this Mac; no Firebase files → seeded values; the team's behaviours kept, flutter-ads section 4); each team-app name replaced in step 5; before release: the owner's AdMob App IDs (`AndroidManifest.xml`, `Info.plist`), the real ad unit ids in Remote Config under the app's parameter, the app's RevenueCat keys in `lib/in_app_purchase/constant.dart` when the installer wrote it.
+The slots found (step 2) and the plan table with each row's source; `ADS_CHANGES.md`'s Checks section, quoted; the 9b table (every row) and what each FAIL fix changed; each step-8 result line, the `proof` lines (every placement PASS with its screenshot); what is not verified and why (iOS on this Mac; no Firebase files → seeded values; the team's behaviours kept, flutter-ads section 4); each team-app name replaced in step 5; every ADAPTED line with its team file:line and the fact about the app that needed it; whether step 1 made the git repository; that the release build was signed with this Mac's debug key; before release: the owner's AdMob App IDs (`AndroidManifest.xml`, `Info.plist`), the real ad unit ids in Remote Config under the app's parameter, the app's RevenueCat keys in `lib/in_app_purchase/constant.dart` when the installer wrote it.

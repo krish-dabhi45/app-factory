@@ -112,13 +112,13 @@ app-factory has four commands; everything else in it (the flutter-app, flutter-a
 | Command | What it does |
 |---|---|
 | `/app-factory:build-app` | Builds the app from `PRD.md`: contract and questions first, then the build, tests, senior QA and the final audit. Ads + Remote Config are in every app unless the PRD says no ads. |
-| `/app-factory:app-dev-without-prd` | **App dev without PRD.** No PRD and no Figma: give it an existing app's link (and its APK in the folder, if you have it); it audits the app, writes `PRD.md` from what it saw with a new theme, then starts `/app-factory:build-app` on it. Section 4a. |
+| `/app-factory:app-dev-without-prd` | **App dev without PRD.** No PRD and no Figma: give it an existing app's link (and its APK in the folder, if you have it); it audits the app (your own app, rebuilt), writes `PRD.md` from what it saw with the app's own theme, icon, images, animations and sounds, then starts `/app-factory:build-app` on it. Section 4a. |
 | `/app-factory:stop` | Stops a running build-app run from the chat that started it, frees its locks and devices, keeps all work. |
 | `/app-factory:ads-implementation` | Adds ads + Remote Config to an app that is already built: explores the entire app, then places every ad by the pattern (section 9b). |
 
-### 4a. App dev without PRD — rebuild an existing app with a new theme
+### 4a. App dev without PRD — rebuild your own existing app
 
-For an app you want rebuilt with **all of its functionality** and a **different theme and colours**, when you have no PRD and no Figma file. In an empty project folder (the app's `.apk`, `.apks`, `.xapk` or `.apkm` may be in it), or in the folder of an earlier run of this command, which is continued (see "A folder with earlier work" below):
+For **your own app**, rebuilt with **all of its functionality** and **its own look**: its colours and fonts, launcher icon, images, Lottie animations and sounds are taken from its APK and reused (`source-app.mjs reuse` → `source-app/assets/`); an image the APK does not hold (a photo in a split APK that was not given) is fetched from Openverse during the build (`source-app.mjs image`; public domain first, the agent opens each one and keeps it only when it shows the subject). Use it when you have no PRD and no Figma file. In an empty project folder (the app's `.apk`, `.apks`, `.xapk` or `.apkm` may be in it), or in the folder of an earlier run of this command, which is continued (see "A folder with earlier work" below):
 
 ```
 /app-factory:app-dev-without-prd {"app":"https://play.google.com/store/apps/details?id=<package>","name":"<new app name>"}
@@ -152,7 +152,7 @@ The link may be a Google Play link, an App Store link or the app's website; `nam
 | In the folder | What runs |
 |---|---|
 | `PRD.md` with 0 `check` problems and every part of `static.md` (or no APK to add them from) | no audit — `nextStep` = `/app-factory:build-app {"noFigma":true}`; with `CONTRACT.md` there, its contract stage **re-audits CONTRACT.md** (below) and the build continues from the code |
-| `PRD.md` that fails the current `check`, or a `static.md` without the parts of 0.49.0 (`## Layouts`, `## Data in the code`, `source-app/res-hashes.txt`) | **PRD re-audit**: evidence with ids kept; only the missing `static.md` parts added from the APK (`staticMissing`); a walk only when `walk.md` has no screen; every gap asked (`P<n>`); the Report continues `PRD.md` — check first, fix what it lists. `CONTRACT.md` and `lib/` are kept; then the contract re-audit and the build continue as in the row above |
+| `PRD.md` that fails the current `check`, or a `static.md` without the parts of 0.49.0 (`## Layouts`, `## Data in the code`, `source-app/assets.md`) | **PRD re-audit**: evidence with ids kept; only the missing `static.md` parts added from the APK (`staticMissing`); a walk only when `walk.md` has no screen; every gap asked (`P<n>`); the Report continues `PRD.md` — check first, fix what it lists. `CONTRACT.md` and `lib/` are kept; then the contract re-audit and the build continue as in the row above |
 | `source-app/` evidence, no `PRD.md` | only the audits whose file has no id; then the questions and the Report |
 | a PRD, or an app, and no `source-app/` | stops: not this command's work |
 
@@ -160,7 +160,7 @@ The link may be a Google Play link, an App Store link or the app's website; `nam
 
 `/app-factory:build-app` with `"stage":"build"` does the same for code: an **existing work** step (read only) runs `flutter analyze` and the unit and widget tests, and sorts every contract criterion into done (a test named after it passed), failing or missing. With the shared layer present (`lib/main.dart`, theme, routes, `lib/ui/core/app_keys.dart`, no analyze error) there is no interface step; a group whose criteria are all done is not built again; the other groups' builders get the list of what already passes and extend the files that are there. A criterion the contract re-audit changed or added is built again even when an old test named after it passes (its code and tests are made to match the new line); the integrator deletes the code, screens and tests that served only a removed criterion. The gate, the device tests, senior QA and the final audit then run over the whole app as always.
 
-Not copied into the new app: the source's name, logo, icon, illustrations, marketing texts, keys, IDs and servers. A feature that needs a backend (sign-in, a cloud database, a paid API) goes through the contract's Missing keys step like any PRD: a free no-key service for now, a "not available" message, or your key.
+Reused in the new app: everything of the source app's own (it is your app) — PRD.md's section "Reused from the source app" places each file of `source-app/assets.md` (or says why one is not used, e.g. an ad network's icon). Never written in a file: keys (stored with `secret`). The one stop at the start also asks for the Firebase files, the RevenueCat key (a Test Store key tests purchases for real) and your services' keys and hosts. A feature that needs a backend (sign-in, a cloud database, a paid API) goes through the contract's Missing keys step like any PRD: a free no-key service for now, a "not available" message, or your key.
 
 Without an APK there is no walk: screens come from the store screenshots and the listing, and every rule no source shows is `NOT OBSERVED` — an APK gives a much more exact rebuild.
 
@@ -298,7 +298,21 @@ Without a simulator, every screen also has layout tests (build rule T3, helper `
 
 ## 9b. Ads
 
-Every Flutter app gets ads + Remote Config by default, whether or not the PRD mentions ads; only a PRD (or a run note) that says the app has no ads leaves them out, and CONTRACT.md section 9 then quotes that line. The implementation is **the team's own change, applied — nothing else**: the AI PPT app before its ads (`/Users/mach/ads-testing.v2` commit `5ac9743`) → the team's build (`/Users/mach/testing/ai_ppt_generater`). `templates/flutter/ads/` holds both sides of every file of that change and `RECIPE.md`, the change as a diff with the team's file:line; `ads-install.mjs template` builds it, and its selftest fails when the template is not the two builds, when the builds differ in a file the change does not name, or when the installer run on the app before its ads is not the team's build byte for byte.
+Every Flutter app gets ads + Remote Config by default, whether or not the PRD mentions ads; only a PRD (or a run note) that says the app has no ads leaves them out, and CONTRACT.md section 9 then quotes that line. The implementation is **the team's own, in the app's structure**: the change the team made to put ads into its AI PPT app.
+
+- **Where it lives:** `templates/flutter/ads/` holds all of it, so a run needs no folder outside the plugin:
+  - both sides of every file of the change;
+  - `base/`: the helpers `lib/ads` uses, including the team's `showLog` / `showToast` / `appText`;
+  - `RECIPE.md`: the change as a diff, plus the team's ad lines of each file that is wired by hand.
+- **What is copied whole:** the installer copies the team's ads files, helpers and Android lines into any Flutter app. On a fresh `flutter create` app, `lib/ads` analyzes with 0 errors before any wiring.
+- **What goes into the app's own code:** the team's ad lines go, as written, into the app's own screens, launch and purchase code. The app's structure stays as it is. The only lines written for an app are the listed ADAPTED kinds (`skills/flutter-ads` section 2), each with its team file:line.
+- **The commit to start from:** a folder with no git repository gets one (`ads-install.mjs base`).
+- **The release build for the device checks:** it is signed with this Mac's debug key (`ads-install.mjs release`), so the owner's keystore is never needed.
+- **Rebuilding the template:** `ads-install.mjs template` rebuilds it from the team's two builds (`/Users/mach/ads-testing.v2` commit `5ac9743` → `/Users/mach/testing/ai_ppt_generater`; only that command needs them). Its selftest fails when:
+  - the template is not the two builds;
+  - the builds differ in a file the change does not name;
+  - the installer, run on the app before its ads, does not give the team's build byte for byte;
+  - `lib/ads` or `base/` imports a file the template lacks.
 
 - **Install:** `scripts/ads-install.mjs` — an app file that is the team's before the ads becomes the team's after them; a team-base file that differs elsewhere gets the team's change by a 3-way merge (`git merge-file`), its other lines kept; a fresh app gets the team's new files (`lib/ads/`, the native layouts and fonts, the API 35 styles), helpers and Android lines. `lib/main.dart`: `isFirstTimeVisited = prefs.getBool("isFirstTime") ?? false`, as the team's `main.dart:16` (null skipped the splash interstitial on a fresh install; NOT DONE when `main.dart` never sets it). Imports point at the app's own helpers; the app's Remote Config parameter is kept.
 - **Where:** the ad slots the app prepared in comments first (switched on as written), then RECIPE.md's hunks for each team screen the app has a screen for (splash, intro, home, the `onTapInter` list, the reward-gated action, settings, the purchase) — the team's lines as written, only a team-app name replaced with the app's own.

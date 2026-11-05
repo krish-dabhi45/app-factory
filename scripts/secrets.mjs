@@ -5,6 +5,9 @@
 //   node secrets.mjs set <NAME>                 — the value from stdin (paste, then Ctrl-D; or a pipe)
 //   node secrets.mjs names                      — the stored key names (no values)
 //   node secrets.mjs define                     — prints --dart-define-from-file=<file> when keys are stored, else nothing
+//   node secrets.mjs runconfig                  — the user's own runs get the keys too: .vscode/launch.json and
+//                                                 .idea/runConfigurations/main_dart.xml pass --dart-define-from-file=<file>,
+//                                                 and README.md says how to run and build with it (names only, never a value)
 //   node secrets.mjs native [<NAME> [android:<property>] [ios:<VAR>]]
 //                                               — records where a native SDK reads a key and writes it there in this
 //                                                 checkout (android/local.properties, ios/Flutter/Secrets.xcconfig — both
@@ -359,12 +362,33 @@ function forget(project) {
   return `forgotten by the coding agents: ${names.length} key(s) (${names.join(', ')}) masked in ${hits.length ? hits.join('; ') : 'nothing — no agent record held one'}. Kept for the app, unchanged: the secrets file (builds read it with secret define), android/local.properties, ios/Flutter/Secrets.xcconfig and the project's files.`
 }
 
+// The agents build with `secret define`; without this the user's own Run (IDE button, flutter run) compiles every
+// String.fromEnvironment key as "" — the Mendwise run (2026-11-04): the AI answered 401 "You didn't provide an API key".
+const RUN_MARK = ['<!-- app-factory:run -->', '<!-- /app-factory:run -->']
+export function runconfig(project, dir = process.cwd()) {
+  const v = values(project)
+  if (!v.length) return 'no keys stored: the default run configuration needs nothing'
+  const arg = `--dart-define-from-file=${secretsFile(project)}`, name = 'main.dart (with the API keys)'
+  const vs = path.join(dir, '.vscode', 'launch.json'), launch = readJson(vs, { version: '0.2.0', configurations: [] })
+  launch.configurations = [{ name, request: 'launch', type: 'dart', program: 'lib/main.dart', toolArgs: [arg] }, ...(launch.configurations || []).filter((c) => c.name !== name)]
+  fs.mkdirSync(path.dirname(vs), { recursive: true }); fs.writeFileSync(vs, JSON.stringify(launch, null, 2) + '\n')
+  const idea = path.join(dir, '.idea', 'runConfigurations', 'main_dart.xml'); fs.mkdirSync(path.dirname(idea), { recursive: true })
+  fs.writeFileSync(idea, `<component name="ProjectRunConfigurationManager">\n  <configuration default="false" name="main.dart" type="FlutterRunConfigurationType" factoryName="Flutter">\n    <option name="additionalArgs" value="${arg}" />\n    <option name="filePath" value="$PROJECT_DIR$/lib/main.dart" />\n    <method v="2" />\n  </configuration>\n</component>\n`)
+  const rd = path.join(dir, 'README.md'), old = fs.existsSync(rd) ? fs.readFileSync(rd, 'utf8') : ''
+  const block = [RUN_MARK[0], '## Run with the API keys', '', `The app reads its keys (${v.map(([n]) => n).join(', ')}) at build time. They are stored outside the project, on this Mac, in \`${secretsFile(project)}\`. Without that file the keys are empty and every feature that needs one fails.`, '',
+    '- Android Studio: run the "main.dart" configuration (it passes the file). VS Code: "main.dart (with the API keys)".', `- Terminal: \`flutter run ${arg}\``, `- Release: \`flutter build apk --release ${arg}\` (and \`flutter build ipa ${arg}\`)`, '', RUN_MARK[1]].join('\n')
+  const at = old.indexOf(RUN_MARK[0]), end = old.indexOf(RUN_MARK[1])
+  fs.writeFileSync(rd, at >= 0 && end > at ? old.slice(0, at) + block + old.slice(end + RUN_MARK[1].length) : `${old.trimEnd()}${old ? '\n\n' : ''}${block}\n`)
+  return `run configurations pass the key file (${v.length} key(s): ${v.map(([n]) => n).join(', ')}): .vscode/launch.json, .idea/runConfigurations/main_dart.xml; README.md "Run with the API keys"`
+}
+
 export function secret([sub, ...a], stdin = () => fs.readFileSync(0, 'utf8')) {
   const project = projectOf()
   if (sub === 'set') return set(project, a[0], stdin())
   if (sub === 'names') { const v = values(project); return v.length ? v.map(([n, x]) => `${n} (${x.length} characters)`).join('\n') : 'no keys stored' }
   if (sub === 'define') return values(project).length ? `--dart-define-from-file=${secretsFile(project)}` : ''
   if (sub === 'native') return native(project, process.cwd(), a)
+  if (sub === 'runconfig') return runconfig(project)
   if (sub === 'scan') return scan(project, a)
   if (sub === 'import') return importFile(project, a[0] || findPrd(project))
   if (sub === 'move') return move(project, a)
@@ -378,7 +402,7 @@ export function secret([sub, ...a], stdin = () => fs.readFileSync(0, 'utf8')) {
     return redact(out, needles(project))
   }
   if (sub === 'forget') return forget(project)
-  throw new Error("secret set <NAME> | names | define | native [<NAME> android:<prop> ios:<VAR>] | import <file> | move [file ...] | run '<command using $NAME>' | scan [file ...] | forget")
+  throw new Error("secret set <NAME> | names | define | runconfig | native [<NAME> android:<prop> ios:<VAR>] | import <file> | move [file ...] | run '<command using $NAME>' | scan [file ...] | forget")
 }
 
 function selftest() {
@@ -399,6 +423,18 @@ function selftest() {
     assert.ok(!secretsFile(proj).startsWith(proj), 'the secrets file is outside the project')
     assert.equal(secret(['define']), `--dart-define-from-file=${secretsFile(proj)}`)
     assert.ok(!secret(['names']).includes(KEY))
+    // the user's own runs get the keys: IDE run configurations and README, the path only (never a value); a second run replaces
+    fs.writeFileSync(path.join(proj, 'README.md'), '# app\n')
+    assert.match(secret(['runconfig']), /1 key\(s\): MAPS_API_KEY/)
+    const launch = JSON.parse(fs.readFileSync(path.join(proj, '.vscode', 'launch.json'), 'utf8'))
+    assert.deepEqual(launch.configurations[0].toolArgs, [`--dart-define-from-file=${secretsFile(proj)}`])
+    assert.ok(fs.readFileSync(path.join(proj, '.idea', 'runConfigurations', 'main_dart.xml'), 'utf8').includes(`name="additionalArgs" value="--dart-define-from-file=${secretsFile(proj)}"`))
+    secret(['runconfig'])
+    const rd = fs.readFileSync(path.join(proj, 'README.md'), 'utf8')
+    assert.ok(rd.startsWith('# app\n') && rd.split('Run with the API keys').length === 2 && rd.includes(`flutter run --dart-define-from-file=${secretsFile(proj)}`), 'README: one run section, kept on a second run')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(proj, '.vscode', 'launch.json'), 'utf8')).configurations.length, 1)
+    for (const f of ['README.md', '.vscode/launch.json', '.idea/runConfigurations/main_dart.xml']) assert.ok(!fs.readFileSync(path.join(proj, f), 'utf8').includes(KEY), `${f} holds no key value`)
+    fs.rmSync(path.join(proj, '.vscode'), { recursive: true }); fs.rmSync(path.join(proj, '.idea'), { recursive: true }); fs.rmSync(path.join(proj, 'README.md'))
     // a worktree checkout resolves to the same project
     process.chdir(tmp); fs.mkdirSync(`${proj}.worktrees/r1`, { recursive: true }); process.chdir(`${proj}.worktrees/r1`)
     assert.equal(secret(['define']), `--dart-define-from-file=${secretsFile(proj)}`)

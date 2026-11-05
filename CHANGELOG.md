@@ -2,7 +2,7 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
-## 0.55.0 — 2026-11-05 — not committed
+## 0.55.0 — 2026-11-05 — commit c912503
 
 **A rerun on a folder that already has the app continues from it — checked against the Mendwise folder (`/Users/mach/app-dev.v1`).** The resume itself has been in the plugin since 2026-11-04 (no-PRD: `source-app.mjs status` → PRD.md re-audited when its check fails, CONTRACT.md and `lib/` kept; build-app: contract re-audit, "existing work" step, groups whose criteria pass are not built again). Under 0.54's checker Mendwise's status is `{prd: true, prdProblems: 12, staticMissing: ["assets"], contract: true, dartFiles: 218}`, so a rerun re-audits PRD.md and continues from the code. Tracing that rerun found 5 defects, fixed here:
 
@@ -36,7 +36,7 @@ One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry 
 - A real rerun of `/app-factory:app-dev-without-prd` on `/Users/mach/app-dev.v1` (the answers.md merge, the Superseded move and the PRD re-audit are agent steps; only the prompts were checked by the simulator).
 - `ids --fix` on an iOS project build (`--ios` was checked on the pbxproj text only).
 
-## 0.54.0 — 2026-11-05 — not committed
+## 0.54.0 — 2026-11-05 — commit c912503
 
 **From the audit of the Mendwise run (`/Users/mach/app-dev.v1`, plugin 0.49/0.50, 2026-11-04 08:38 → 2026-11-05 04:01 UTC).** Every mistake found there now has a rule, a command or a check, for every app, not only this one:
 
@@ -90,7 +90,7 @@ One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry 
 - Opening the written run configuration in Android Studio (the field name is verified from the plugin's class, the dialog was not opened).
 - The answer-quality rules of L14 judged on a real model's answers.
 
-## 0.53.0 — 2026-11-04 — not committed
+## 0.53.0 — 2026-11-04 — commit c912503
 
 **Ads on any app, from the plugin alone:**
 - `/app-factory:ads-implementation` and the build's Ads phase copy the team's ads implementation (structure, files, style) into any Flutter app.

@@ -617,7 +617,8 @@ export function changes(root, base, { slotEdits = [], noScreen = [] } = {}) {
       const was = atBase(f), is = now(f); if (!was || is === null) return []
       const bb = blank(was, false).split('\n'), live = new Set(blank(is).split('\n').map((l) => l.trim()).filter(Boolean)), liveText = blank(is)
       const slot = (l, i) => /^\s*\/\//.test(l) ? bb[i].trim() !== '' : !bb[i].trim() && l.trim() !== ''
-      return was.split('\n').map((l, i) => [l, i]).filter(([l, i]) => AD_CODE.test(l) && slot(l, i) && norm(l) && !refCommented.has(norm(l)))
+      // a /// doc comment is prose about the code, never a slot (Mendwise: `/// … the team's `onTapInter` …` was flagged 4 times); no team file has a /// slot
+      return was.split('\n').map((l, i) => [l, i]).filter(([l, i]) => AD_CODE.test(l) && !/^\s*\/\/\//.test(l) && slot(l, i) && norm(l) && !refCommented.has(norm(l)))
         .filter(([l]) => !live.has(norm(l)) && !liveText.includes(norm(l)))
         .map(([l, i]) => `\`${f}:${i + 1}\` still commented out: \`${norm(l).slice(0, 140)}\``)
     }).slice(0, 40))
@@ -775,7 +776,7 @@ export function adLook(img, v, views, area, dpi, want, { banner = false } = {}) 
   }
   return { ok, text }
 }
-const CHECKER = 5 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
+const CHECKER = 6 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
 export function placements(root, { all = false } = {}) {
   const lib = path.join(root, 'lib'), files = walk(lib).filter((f) => f.endsWith('.dart')).sort(), code = new Map(files.map((f) => [f, blank(read(path.join(lib, f)))]))
   const everything = [...code.values()].join('\n')
@@ -887,12 +888,21 @@ const MARKS = {
   'full-screen: intro app open': [{ src: 'onAdShowedFullScreenContent-==-', is: (l) => l.includes('onAdShowedFullScreenContent-==-') }],
   'full-screen: app open on resume': [{ src: 'AppState', is: (l) => l.includes('AppState.foreground') }, { src: 'onAdShowedFullScreenContent', is: (l) => /AppOpenAd.* onAdShowedFullScreenContent(?!-)/.test(l) }],
 }
+// a screen's own files: its file and the local files it imports whose name starts with its stem (onboarding_view.dart →
+// onboarding_view_model.dart, where Mendwise keeps its intro titles); its text can be in either
+export function screenFiles(root, file) {
+  const stem = path.basename(file, '.dart').replace(/_(view|screen|page)$/, ''), name = (read(path.join(root, 'pubspec.yaml')).match(/^name:\s*(\S+)/m) || [])[1]
+  const imps = [...blank(read(path.join(root, file))).matchAll(/^import\s+'([^']+)'/gm)].map((m) => m[1])
+    .map((p) => (name && p.startsWith(`package:${name}/`) ? `lib/${p.slice(name.length + 9)}` : /^(package|dart):/.test(p) ? null : path.posix.normalize(path.posix.join(path.posix.dirname(file), p))))
+  return [file, ...imps.filter((f) => f && path.basename(f).startsWith(`${stem}_`) && fs.existsSync(path.join(root, f)))]
+}
 export function uiLiterals(code) { // the strings of a Dart file that are text a user reads: words with a space, or a capitalised word; no keys, paths or ids
   const out = new Set()
   const shown = blank(code).replace(/\b(?:showLog|print|debugPrint|log|FirebaseEventService\.logEvent)\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\s*;/g, '') // what is logged is not on the screen
   for (const m of shown.matchAll(/'([^'\\\n$]{3,40})'|"([^"\\\n$]{3,40})"/g)) {
     const t = (m[1] ?? m[2]).trim()
-    if (/[A-Za-z]{3}/.test(t) && !/[/_.:@]/.test(t) && (/\s/.test(t) || /^[A-Z]/.test(t))) out.add(t)
+    // a '.' inside a word is a path or key (a.png, app.title); a sentence's '.' before a space or at the end is text (Mendwise: 'Scan Your Car. Fix It Fast.')
+    if (/[A-Za-z]{3}/.test(t) && !/[/_:@]|\.\S/.test(t) && (/\s/.test(t) || /^[A-Z]/.test(t))) out.add(t)
   }
   return [...out]
 }
@@ -988,8 +998,8 @@ export function seen(root, serial, id) {
     ev.push(...(banners.length ? banners.flatMap((v) => [`banner AdView ${fmt(v.b)}: ${v.b[3] - v.b[1]} px tall (≥ ${min})${inArea(v.b) ? '' : ` — not inside the app's visible area ${fmt(s.area)}`}${covered(v.b, /^PopupWindow/)}`, ...looks.get(v).text.map((t) => `  ${t}`)]) : ['no banner (AdView) shown on the screen']))
   }
   if (!place.kind.startsWith('full-screen')) { // the screen of the placement's own file is the one showing
-    const file = place.id.replace(/:\d+$/, ''), others = new Set(walk(path.join(root, 'lib')).filter((f) => f.endsWith('.dart') && !f.startsWith('ads/') && `lib/${f}` !== file).flatMap((f) => uiLiterals(read(path.join(root, 'lib', f)))))
-    const lit = uiLiterals(read(path.join(root, file))).filter((l) => !others.has(l)), strs = screenStrings(serial), on = lit.filter((l) => strs.some((x) => x.includes(l)))
+    const file = place.id.replace(/:\d+$/, ''), mine = screenFiles(root, file), others = new Set(walk(path.join(root, 'lib')).filter((f) => f.endsWith('.dart') && !f.startsWith('ads/') && !mine.includes(`lib/${f}`)).flatMap((f) => uiLiterals(read(path.join(root, 'lib', f)))))
+    const lit = [...new Set(mine.flatMap((f) => uiLiterals(read(path.join(root, f)))))].filter((l) => !others.has(l)), strs = screenStrings(serial), on = lit.filter((l) => strs.some((x) => x.includes(l)))
     const need = 1, tied = lit.length > 0 && on.length >= need // text only this screen has (a pager shows one page at a time: one is enough)
     ev.push(tied ? `on its screen: ${on.slice(0, 4).map((x) => `"${x}"`).join(', ')} are the text of ${place.id.replace(/:\d+$/, '')}` : `NOT on the screen of ${place.id.replace(/:\d+$/, '')}: ${lit.length ? `none of its ${lit.length} own texts is shown (${lit.slice(0, 4).map((x) => `"${x}"`).join(', ')} …)` : 'the file has no text of its own (every string is also in another screen) to tie the ad to its screen'} — this ad belongs to another screen`)
     ok = ok && tied
@@ -1143,6 +1153,7 @@ function selftest() {
   fixture(ws); install(sk)
   ws('lib/home.dart', "class H {\n  build() {\n    // onTapInter(() => go());\n    keep();\n  }\n}\n")
   ws('lib/main.dart', 'main() async {\n  AdsVariable.isFirstTimeVisited = prefs.getBool("isFirstTime");\n}\n')
+  ws('lib/doc.dart', "/// Taps go through the team's `onTapInter` (RECIPE.md).\nclass D {}\n")
   const g2 = gitIn(sk); g2('init', '-q'); g2('add', '-A'); g2('commit', '-q', '-m', 'base'); const b2 = g2('rev-parse', 'HEAD').trim()
   install(sk); assert.match(rs('lib/main.dart'), /= prefs\.getBool\("isFirstTime"\) \?\? false;\n/, 'null on a fresh install skipped the splash ad')
   ws('lib/home.dart', "class H {\n  build() {\n    // onTapInter(() => go());\n  }\n}\n")
@@ -1151,6 +1162,7 @@ function selftest() {
   assert.match(c, /\*\*FAIL\*\* T2 [^\n]*\n(  - .*\n)*  - `lib\/home\.dart:4` \(at \w{7}\) `keep\(\);` is gone/)
   assert.match(c, /\*\*FAIL\*\* R3 [^\n]*\n(  - .*\n)*  - `lib\/home\.dart:3` still commented out: `onTapInter\(\(\) => go\(\)\);`/)
   assert.match(c, /\*\*FAIL\*\* R4 [^\n]*\n  - lib\/ads\/ads_splash_utils\.dart reads "other_v1"/)
+  assert.doesNotMatch(c, /lib\/doc\.dart:1/, 'a /// doc comment naming an ad call is not a slot')
   ws('lib/home.dart', "class H {\n  build() {\n    onTapInter(() => go());\n    keep(1);\n    if (AdsVariable.homeFlag.isOdd) PopScope();\n  }\n}\n")
   ws('lib/ads/ads_splash_utils.dart', rs('lib/ads/ads_splash_utils.dart').replace('"other_v1"', '"my_app_v1"'))
   c = changes(sk, b2, { slotEdits: ['lib/home.dart:4'] })
@@ -1187,6 +1199,15 @@ function selftest() {
   lk = adLook(null, { b: [1, 2000, 1079, 2150] }, [], [0, 80, 1080, 2300], 420, undefined, { banner: true }); assert.ok(lk.ok, 'a banner 1 px from each edge spans the screen')
   lk = adLook(null, { b: [40, 2000, 1040, 2150] }, [], [0, 80, 1080, 2300], 420, undefined, { banner: true }); assert.ok(!lk.ok && /does not span the screen \(40 px and 40 px/.test(lk.text[1]), 'a banner inside the content padding')
   out.push('ad look (PNG pixels, centred, colour, banner width) ok')
+
+  // screenFiles: a screen and its own view model (Mendwise's intro titles are in onboarding_view_model.dart), not a shared file
+  const sf = tmp('ads-screen-'), wf = (f, t) => put(path.join(sf, f), t)
+  wf('pubspec.yaml', 'name: mendwise\n'); wf('lib/launch/views/onboarding_view.dart', "import '../view_models/onboarding_view_model.dart';\nimport 'package:mendwise/core/app_keys.dart';\nimport 'package:flutter/material.dart';\nclass V {}\n")
+  wf('lib/launch/view_models/onboarding_view_model.dart', "const titles = ['Driving Test Ready'];\n"); wf('lib/core/app_keys.dart', '')
+  assert.deepEqual(screenFiles(sf, 'lib/launch/views/onboarding_view.dart'), ['lib/launch/views/onboarding_view.dart', 'lib/launch/view_models/onboarding_view_model.dart'])
+  assert.deepEqual(uiLiterals("const t = ['Scan Your Car. Fix It Fast.', 'assets/a.png', 'app.title', 'v1.0.2', 'Driving Test Ready'];"), ['Scan Your Car. Fix It Fast.', 'Driving Test Ready'], 'a sentence keeps its period; paths, keys and versions are not text')
+  fs.rmSync(sf, { recursive: true, force: true })
+  out.push('screen files (a screen + its view model) ok')
 
   // crash detection: the lines a device gave for the F2 null show, a native crash, an ANR, and a monkey run
   const dev = "I/flutter ( 6364): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Null check operator used on a null value\nI/flutter ( 6364): #0      AdsLoadUtil.showInterCommon (package:ai_ppt_generater/ads/ads_load_util.dart:227)\nI/flutter ( 6364): #1      onTapInter.<anonymous closure>.<anonymous closure> (package:ai_ppt_generater/service/app_constant.dart:89)\n"

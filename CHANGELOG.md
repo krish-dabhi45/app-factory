@@ -2,6 +2,42 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.58.0 — 2026-11-06 — commit 7b1afa4
+
+**The first run of the ads checks on a real app: the Mendwise app in `/Users/mach/testing/repair coach` (package `com.mendwise.app`, no git, no `google-services.json`), in a copy in the session scratchpad, with the device steps on the emulator `af-standard`.** Three checker defects it exposed are fixed here.
+
+| Defect (evidence on Mendwise) | Now |
+|---|---|
+| R3 failed on 4 `///` doc comments that name an ad call in prose: `usage_repository.dart:51`, `car_templates_view.dart:15`, `unlock_dialog.dart:11`, `subcategory_view.dart:19` | a line starting with `///` is never a slot; no file of the template, of `ai_ppt_generater` or of `IPTV_two` has a `///` ad slot (grep) |
+| `seen` on the intro native: "NOT on the screen of onboarding_view.dart: none of its 3 own texts is shown" — the intro titles are in `onboarding_view_model.dart:17` | `screenFiles(root, file)`: the screen's file plus the local files it imports whose name starts with its stem (`onboarding_view.dart` → `onboarding_view_model.dart`); their texts count as the screen's |
+| `uiLiterals` dropped every string with a `.`, so 'Scan Your Car. Fix It Fast.' and 'Fix Anything, Step by Step.' were not text | a `.` drops a string only when a non-space character follows it (`a.png`, `app.title`, `v1.0.2` still dropped) |
+
+### Changed
+
+- `scripts/ads-install.mjs`: R3 skips `///` lines; `screenFiles` added and used by `seen`; `uiLiterals` period rule; `CHECKER` 5 → 6 (earlier `seen` records are STALE).
+- `skills/flutter-ads/SKILL.md` section 1: the device-test method — host `flutter test` and `flutter test -d <device> test/<file>` both fail in the `objective_c` native-assets hook (`ld: tapi error: malformed file`, `unknown architecture arm64e.x1-macos`); `flutter run -t test/<file>` runs under the live binding, where unchanged tests fail (6 of 6); a wrapper in `integration_test/` calling `IntegrationTestWidgetsFlutterBinding.ensureInitialized()` and each test file's `main()` runs them (49 of 49).
+- `.claude-plugin/plugin.json`: 0.58.0.
+
+### Checked
+
+- `node scripts/ads-install.mjs selftest` → ok, with the new cases: a `/// Taps go through the team's onTapInter (RECIPE.md).` line in a base file is not in R3's evidence; `screenFiles` of `lib/launch/views/onboarding_view.dart` = itself + `lib/launch/view_models/onboarding_view_model.dart` (a `package:` import of another file is not included); `uiLiterals` keeps 'Scan Your Car. Fix It Fast.' and 'Driving Test Ready', drops 'assets/a.png', 'app.title', 'v1.0.2'.
+- `node scripts/simulate.mjs` exit 0; `node scripts/simulate-without-prd.mjs` exit 0.
+- On the Mendwise copy:
+  - `ads-install.mjs changes`: before the installer, R5 FAIL "config.json is missing or not JSON", T1 FAIL "`pubspec.yaml`: no fluttertoast", R3 FAIL (the 4 doc comments); after the installer, R5 FAIL "every colour key is still the template's"; after the THEME values (`#FFFFFF`, `#1F1A14`, `#1F1A14`, `#B45309`, `#B45309`, `#FFFFFF`, `#B45309`, `#FFFFFF`, from `app_theme.dart:34`, `:51` and `app_colors.dart:6`, `:7`, `:11`, `:12`) and this version: 8 checks PASS, I3 FAIL only because the test suite was not run in the copy.
+  - debug APK built in 192 s; `ads-install.mjs launch` → "PASS launch debug: app-debug.apk started (pid 6369) and ran 30 s on cleared data".
+  - `adb exec-out screencap -p` gives "PNG image data, 1080 x 2400, 8-bit/color RGBA, non-interlaced"; `ads-install.mjs pixel` on it: Start button `#B45309` = `AppColors.primary`, page `#FFF8F1` = `AppColors.background` (`app_colors.dart:10`).
+  - `ads-install.mjs seen <copy> emulator-5554 lib/ui/features/launch/views/onboarding_view.dart:148` → FAIL "no native ad (ad_view) shown on the screen"; logcat: "Default FirebaseApp failed to initialize because no default options were found".
+  - the app's `test/ui/ads/ads_test.dart` and `test/ui/launch/onboarding_view_test.dart` with one new test, through the `integration_test` wrapper on the emulator: "03:42 +49: All tests passed!".
+
+### Not checked
+
+- `seen`'s `alignment:` and `theme:` lines on a loaded ad: Mendwise has no `google-services.json`, so the team's code never starts AdMob (flutter-ads section 1) and no ad loads.
+- `seen`'s screen tie with the view-model texts on a device: it needs a loaded intro native (same reason).
+
+### Not in this version
+
+- The changes in `/Users/mach/testing/repair coach` (not a plugin file): `lib/main.dart` `?? false`, `pubspec.yaml` `fluttertoast: ^10.0.2`, a new `config.json` with the THEME colours, one new test in `test/ui/ads/ads_test.dart`.
+
 ## 0.57.0 — 2026-11-06 — commit a7a2aa7
 
 **Where an ad sits in an app's look is now taken from the team's two apps with ads, the AI PPT app and IPTV_two, rule by rule with both apps' file:line.** The user asked that such tasks follow those two apps' handling, without rules of app-factory's own. 0.56.0 had three rules that neither app has, and they are removed:

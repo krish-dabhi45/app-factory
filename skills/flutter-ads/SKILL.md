@@ -30,7 +30,7 @@ The team's folders it was built from (`/Users/mach/ads-testing.v2`, `/Users/mach
 - **Written for an app (ADAPTED lines):** only the glue the app's structure needs for a team statement to run there, in the kinds listed in section 2 step 4. Each is listed with the team file:line it serves and the fact about the app that needs it.
 
 **Never:**
-- anything from IPTV_two or an earlier app-factory version;
+- anything from IPTV_two or an earlier app-factory version (IPTV_two is cited only in section 8, as the team's second example of where an ad sits in an app's look; none of its code is installed);
 - an ad condition, size, widget, `PopScope`, key spelling, Gradle or manifest line that the team's code does not have.
 
 **Not even a fix:** the team's `addAdIds()` reads `"nativeBig"` and its Remote Config key is spelled `sendRedvenueToAnalyticsForNativeIntroBig`. Both stay as the team wrote them. A bug you find is reported, not fixed.
@@ -51,7 +51,7 @@ It also missed the team's `resetAdIds()` after a purchase (`initPlatformState.da
 
 ## 1. Verified facts
 
-- **Ad unit ids** are Remote Config values under the app's parameter; `"11"` turns that ad off. `config.json` sits at the project root and is not an asset (the app never reads it). The installer writes it with every key the app's `lib/ads/ads_splash_utils.dart` reads (`mapValues1["…"]`): Google's test units for the ad ids, the code's own default for the rest (`apiCookie` `""`). This is the value to publish. Its eight colour keys are the app's theme (section 8), never the template's. Before a release the owner's ids replace the test units (`release-check.mjs` O6), and the app's Facebook App ID and Client Token replace `facebookId` / `facebookToken` `"11"`: `"11"` does not turn Facebook off, the SDK starts with it and Facebook rejects every call (O8). Without `google-services.json` / `GoogleService-Info.plist`, Remote Config is never read, every id stays `"11"` and no ads show.
+- **Ad unit ids** are Remote Config values under the app's parameter; `"11"` turns that ad off. `config.json` sits at the project root and is not an asset (the app never reads it). The installer writes it with every key the app's `lib/ads/ads_splash_utils.dart` reads (`mapValues1["…"]`): Google's test units for the ad ids, the code's own default for the rest (`apiCookie` `""`). This is the value to publish. Its eight colour keys are set from the app (section 8), never left at the template's. Before a release the owner's ids replace the test units (`release-check.mjs` O6), and the app's Facebook App ID and Client Token replace `facebookId` / `facebookToken` `"11"`: `"11"` does not turn Facebook off, the SDK starts with it and Facebook rejects every call (O8). Without `google-services.json` / `GoogleService-Info.plist`, Remote Config is never read, every id stays `"11"` and no ads show.
 - **Firebase starts AdMob.** In the team's `getOnlineIds`, `Firebase.initializeApp()` (`lib/ads/ads_splash_utils.dart:105`) opens a `try`; `setupFbAdsId()` (`:288`, which makes `MainActivity.kt` register the three native factories in its `"setToast"` handler) and `initializeGDPR()` (`:292`, the only caller of `MobileAds.instance.initialize()` at `:471`) run inside it. Without `google-services.json` / `GoogleService-Info.plist`, `:105` throws and both are skipped: no ad shows, with any id (Mendwise, 2026-11-04: "No NativeAdFactory with id: smallNativeAds", 0 of 11 placements seen after 3 rounds). So build-app's contract asks for the Firebase files at the start (never recommends going without them), and while they are missing every ads criterion is blocked at once, the wiring checked and audited, no device rounds.
 - **The owner's ids missing → Google's test ids, and testing goes on:** the AdMob App ID (manifest, `Info.plist`) and every ad unit id are Google's test ids (the installer writes them in `config.json`, the value to publish under the app's Remote Config parameter); the ads are built and proven on a device with them. `release-check.mjs` O6 blocks the store release until the owner's ids replace them.
 - **RevenueCat:** the team's `getOnlineIds` runs `configureSDK()` unawaited at launch, and `Purchases.configure` throws "API key must be set" with an empty key on every launch (`:381-394`; Mendwise X71). `lib/in_app_purchase/constant.dart` (app-owned) reads its keys from `lib/config/api_keys.dart` (flutter-app L12): a RevenueCat Test Store key (`REVENUECAT_TEST_API_KEY` — the dashboard's Test configuration; `purchases_flutter` 9.8.0 or later, the template has ^10.15.2) in debug and profile builds, the platform keys (`REVENUECAT_GOOGLE_API_KEY`, `REVENUECAT_APPLE_API_KEY`) in release — RevenueCat: never ship a Test Store key. With a Test Store key, purchases run for real in test mode and are tested on the device (section 7).
@@ -92,8 +92,8 @@ The installer applies the whole change when the app's files are the team's files
    - Where the app's line is the same expression with its own value, the team's line goes in with the app's value in place of the team's old one. Example: the IPTV intro image had `width: sw * 0.9` (the team's base had `sw`), and it became `(… nativeIntroBig != "11" …) ? sw * 0.68 : sw * 0.9`. Left as `sw * 0.9`, the big native pushed the intro title under the image (device, 2026-10-30).
    - A team file the app has nothing for (no intro, no settings) is named with `--no-screen <team file>` and listed.
    - **Hosting a native or a banner.** The team shows a native as one item in home's vertical list (`after/lib/screens/home_screen.dart`) and a banner at the bottom of a screen's content. In the app's screen with the same job:
-     - a native goes into the app's own scroll of content at the team's relative position (after the first row or item), framed as one of that list's items and inside the same content padding (section 8). When the body is not a scroll that takes an extra child (a `GridView.count`, a single widget), wrap it so the native sits above or below it inside a scroll, with the horizontal padding of the content around it — an ADAPTED host line (step 4);
-     - a banner goes at the bottom of the screen's body, above the navigation bar; a `CollapsibleBannerWidget` gets the app's `backgroundColor:` (section 8);
+     - a native goes into the app's own scroll of content at the team's relative position (after the first row or item), in the team's frame with the app's item border, inside the list's content padding (section 8). When the body is not a scroll that takes an extra child (a `GridView.count`, a single widget), wrap it so the native sits above or below it inside a scroll, with the horizontal padding of the content around it — an ADAPTED host line (step 4);
+     - a banner goes in as the last child of the screen's body `Column`, below the content and outside its padding (section 8);
      - when the native or banner needs ad lifecycle the app's widget does not have (`initState` reactor, `didChangeDependencies`, `setState`), convert the app's `StatelessWidget` to a `StatefulWidget` — an ADAPTED host line (step 4); the tree it returns is unchanged but for the ad slot;
      - a per-screen banner whose job lives inside another screen (the app has no separate screen for that job) goes on the screen that does that job when it has a scrollable body, otherwise `--no-screen`.
    - **One first-launch flag.** The team's `prefs` key `"isFirstTime"` (`AdsVariable.isFirstTimeVisited`, set when the intro finishes) is the app's "onboarding done": the app keeps no second flag for the same thing, and its launch decision reads that one (the app's own flag, if it has one, is replaced by it — a slot edit). Two flags disagreed in Mendwise (2026-11-04: the app's `settings.onboarding_done` and the team's `isFirstTime`). The launch flow test relaunches the app with its data kept and asserts that the intro does not show again.
@@ -106,8 +106,7 @@ The installer applies the whole change when the app's files are the team's files
    - **navigation / state swap** — the app's own navigation or state call where the team's line calls its own (`Get.offAll(() => HomeScreen())` → the app's call that opens its home; `UpsellScreen(…)` → the app's purchase screen with the app's own arguments);
    - **GetMaterialApp wrap** — the team's `GetMaterialApp` inside `ScreenUtilInit(designSize: const Size(1242, 2688))` around the app's `MaterialApp`, for an app without GetX / ScreenUtil, as the team's app base has it. The team's `Obx`, `Get.*` and `.w` / `.sp` lines then work as written; they are never translated into the app's state management;
    - **host** — a `StatelessWidget` → `StatefulWidget` conversion, or a `Column` / `SingleChildScrollView` wrapper around a screen's body, where a team native or banner has no place in the app's widget as it is: the ad slot only, the rest of the tree unchanged; a `Padding` around the slot uses the app's own horizontal padding value of the content around it (its file:line);
-   - **frame** — the decoration of an item of the app's list, around a native in that list (section 8, "The frame"): copied from that item, with its file:line;
-   - **theme** — the `backgroundColor:` argument on the team's `CollapsibleBannerWidget(` call (section 8, "The collapsible banner"): the app's colour, with its file:line;
+   - **frame** — the team's frame `Container` around a native in a list (section 8, "The frame"), with the radius, border and gap of an item of that list, each with its file:line;
    - **state** — the team's `AdsVariable.isPurchase.value = true;` where the app's purchase succeeds but the app records no premium state of its own, so `resetAdIds()` has a line to sit next to.
 
    Each ADAPTED line goes into the plan with its kind, its team file:line and the fact about the app that needs it (for example "host — no vertical scroll on home: GridView wrapped in a Column, `lib/screens/home_screen.dart:22`"). 9b checks every one, and fails a line of any other kind or whose stated fact is not true in the app.
@@ -207,54 +206,85 @@ The app's paywall is built in the structure of the team's premium screen, `templ
 - Privacy Policy and Terms of Use links; close (X).
 - No RevenueCat key in the build: the screen is built in full, and shows "Subscriptions aren't available yet" in place of the cards (flutter-app L12). With a Test Store key: a flow test buys the weekly plan on the device and asserts Premium (no ad shows, `isPurchase` true) and that Restore finds it.
 
-## 8. Theme and alignment — every ad in the app's look, on every screen
+## 8. Theme and alignment — the look the team gives its ads, in each app
 
-The team's ads take their look from three places. Each one is set from the app's theme; no other line of the team's code is changed for looks. The value of each, and where it comes from in the app, is a row of the plan.
+The team's two apps with ads are the reference for how an ad sits in an app's look: the AI PPT app (its build, `templates/flutter/ads/after/`) and IPTV_two (`/Users/mach/testing/IPTV_two`, code of 2026-10-07 to 10-10; its `config.json` of 10-26 is app-factory's, not the team's). Both do the same, and the rules below are what both do, with their lines. IPTV_two is cited only as the second example of these rules. No IPTV_two code is installed, and a run needs neither folder: the rules are written here.
+
+| | AI PPT app | IPTV_two |
+|---|---|---|
+| Native in a list (home) | `home_screen.dart:225-234` | `bottom_bar/stream_now_iptv_screen.dart:94-105` |
+| its frame: `Container(alignment: Alignment.center, width: sw, padding: EdgeInsets.all(30.w), decoration: BoxDecoration(borderRadius: …, border: Border.all(…)), child: NativeAdsWidget(…))`, no fill colour | border `Color(0xff343434)` = the topic item's border (`:262`); radius `35.w` = the item's (`:261`) | border `Color(0xFFE9EDF3), width: 1.5` = the channel card's border (`:178`); radius `20` (the card's: `15`, `:177`) |
+| its bottom margin = the gap between the list's items | `.marginOnly(bottom: 40.w)` (`:234`) = the item's `.marginOnly(bottom: 40.w)` (`:270`) | `margin: EdgeInsets.only(bottom: 30.w)` (`:98`) = the `30.verticalSpace` between the items (`:66`, `:77`, `:86`) |
+| it sits inside the screen's content padding | the list's `padding: EdgeInsets.symmetric(horizontal: 50.w, …)` (`:217`) | the screen's `padding: .symmetric(horizontal: 50.w)` (`:35`) |
+| Native on the intro | no frame; the last child of the page's `Column`, after the Continue button and `50.verticalSpace` (`onboarding_screen.dart:146-151`) | the same (`intro_screen.dart:140-145`) |
+| Banner | the last child of the screen's bottom `Column`, after the main button and `50.verticalSpace` (`home_screen.dart:295-297`, `select_template_screen.dart:169-170`, `template_preview_screen.dart:112-113`) | the last child of the body `Column`, below the `Expanded` content (`channel_list_screen.dart:122`, `bottom_bar/channels_screen.dart:135`, `playlist_group_screen.dart:82`) |
+| the banner's width | outside the content padding: the padding is on the content (`playlist_group_screen.dart:39`), the banner has no wrapper, so it spans the screen | the same |
+| `CollapsibleBannerWidget(backgroundColor:)` | never passed: the widget's default `Color(0xff060B12)` (`after/lib/ads/ads_collapsible_banner.dart:23`) | IPTV uses `BannerWidget` (transparent, `banner_widget.dart:75`) |
+| The native colours | the same defaults in both apps (`lib/ads/ads_variable.dart:51-60`; IPTV `:52-61`: `nativeBGColor` `#342F38`, text `#FFFFFF`, buttons `#6F34FF` → `#C93EA2`), none of them a colour of either app's screens; the published values are only in each app's Firebase Remote Config, which neither folder has | the same |
+
+### The frame — the team's `Container`, with the app's item border
+
+A native in a list goes in the team's frame, as both apps write it:
+
+```dart
+Container(
+  alignment: Alignment.center,
+  width: sw,
+  padding: EdgeInsets.all(30.w),
+  decoration: BoxDecoration(
+    borderRadius: BorderRadius.circular(<the app's item radius>),
+    border: Border.all(color: <the app's item border colour>, width: <its width, when the item sets one>),
+  ),
+  child: NativeAdsWidget(showNativeAd: AdsVariable.nativeAdHome, isSmallNative: true, isFullNative: false),
+).marginOnly(bottom: <the gap between the app's items>)
+```
+
+- The radius, border colour, border width and gap come from one item of the same list, each with its file:line: an ADAPTED frame line (section 2 step 4).
+- No `color:` fill (neither app has one), and no inner padding other than the team's `30.w`.
+- An app whose items have no border: neither team app shows this. The frame then has no `border:` (radius, padding and margin stay); this is written in the plan as decided.
+- The frame is for a native in a list only. The intro native has none.
+
+### Where natives and banners sit
+
+- **Native in a list:** a child of the list, so the list's content padding applies to it; its left and right edges line up with the items'. A host wrapper (section 2 step 4) uses the screen's own horizontal content padding value, with its file:line.
+- **Native on the intro:** the last child of the page's `Column`, after the main button and `50.verticalSpace`, no frame (section 2, the intro and the image size). Every page stays whole with it: text, image, page indicator and buttons on screen, none under the native or cut off.
+- **Banner:** the last child of the screen's body `Column`, below the content (after an `Expanded` content area, or after the main button and `50.verticalSpace` when the screen ends in one). No wrapper and no padding: it spans the screen. The content's padding stays on the content. The app's last list item scrolls fully above it, and no floating button sits on it.
+- `CollapsibleBannerWidget(` goes in as the team calls it, with no `backgroundColor:`.
 
 ### The native colours — eight Remote Config keys, in `config.json`
 
-Read at `lib/ads/ads_splash_utils.dart:32-39` (the last online launch) and `:125-132` (online), sent to Android at `:364-377` (`setToast`), applied by the factories of `MainActivity.kt` (`NativeAdFull` `:188`, `NativeAdBig` `:375`, `NativeAdSmall` `:532`). There is one set for every native: home, the intro and every other screen.
+Read at `lib/ads/ads_splash_utils.dart:32-39` (the last online launch) and `:125-132` (online), sent to Android at `:364-377` (`setToast`), applied by the factories of `MainActivity.kt`. There is one set for every native: home, the intro and every other screen.
 
-| Key | What it colours (the team's `MainActivity.kt`: full, big, small factory) | The app's value |
-|---|---|---|
-| `nativeBGColor` | the whole native, `flNativeAds` (`:212`, `:399`, `:557`) | the colour of one item of the list the home native sits in (its `Container` / `Card` `color:`); items with no colour of their own → the screen's background (`Scaffold(backgroundColor:)`, else the theme's `scaffoldBackgroundColor`) |
-| `headerTextColor` | the headline (`:236`, `:423`, `:579`) | that item's title text colour |
-| `bodyTextColor` | the body text (`:247`, `:434`, `:589`) | that item's second text line colour; no second line → `headerTextColor` |
-| `btnBgColor1`, `btnBgColor2` | the call-to-action button's gradient (`:296-297` and `:319-320`, `:482-483`, `:632-633`) and the "Ad" badge (`:259-260`, `:446-447`, `:601-602`) | the app's main button: the first and the last colour of its gradient; a one-colour button → that colour in both |
-| `btnTextColor` | the call-to-action text (`:288` and `:314`, `:475`, `:628`) and the "Ad" badge text (`:277`, `:464`, `:619`) | that button's text colour |
-| `btnAdBgColor`, `btnAdTextColor` | nothing: sent (`ads_splash_utils.dart:372`, `:374`) and stored (`MainActivity.kt:88-91`), and no factory takes them | `btnBgColor1`, `btnTextColor`, so every published colour is the app's |
+| Key | What it colours (the team's `MainActivity.kt`: full, big, small factory) |
+|---|---|
+| `nativeBGColor` | the whole native, `flNativeAds` (`:212`, `:399`, `:557`) |
+| `headerTextColor` | the headline (`:236`, `:423`, `:579`) |
+| `bodyTextColor` | the body text (`:247`, `:434`, `:589`) |
+| `btnBgColor1`, `btnBgColor2` | the call-to-action button's gradient (`:296-297` and `:319-320`, `:482-483`, `:632-633`) and the "Ad" badge (`:259-260`, `:446-447`, `:601-602`) |
+| `btnTextColor` | the call-to-action text (`:288` and `:314`, `:475`, `:628`) and the "Ad" badge text (`:277`, `:464`, `:619`) |
+| `btnAdBgColor`, `btnAdTextColor` | nothing: sent (`ads_splash_utils.dart:372`, `:374`) and stored (`MainActivity.kt:88-91`), and no factory takes them |
 
-- **Written** `#RRGGBB`, or `#AARRGGBB` for a colour with alpha. `Color.parseColor` takes nothing else. The team's own fallbacks (`"1A1A1A"` at `:32` and `:125`) have no `#` and fail in it, so `config.json` carries every key: it is the value to publish under the app's parameter. R5 checks it.
-- **From** a literal in the app's `lib/`: `Color(0xAARRGGBB)` → `#RRGGBB` when AA is FF, else `#AARRGGBB`; a Material constant → its value (`Colors.white` `#FFFFFF`, `Colors.black` `#000000`, the rest from Flutter's `colors.dart`). A colour the code computes (`ColorScheme.fromSeed`, `withOpacity` over a background, a Material default) is read from the step-2 screenshot of that screen: `ads-install.mjs pixel <png> <x> <y>` at a point of that element with no text or image on it.
-- **Light and dark:** the factories take one set. `MaterialApp(themeMode: ThemeMode.dark)` → the colours of `darkTheme`; otherwise those of `theme`. An app with a `darkTheme` that follows the system (no `themeMode`, or `ThemeMode.system`) gets the `theme` colours, and the report says: "In dark mode the natives keep the light colours: the team's factories take one colour set (`MainActivity.kt` `setToast`)."
-
-### The frame — a native dressed as one of the app's items
-
-The team framed its home native as one of its own list items. The `Container` around `NativeAdsWidget` (`after/lib/screens/home_screen.dart:225-234`) has the topic item's width, corner radius and border (`:256-262`: `width: sw`, `BorderRadius.circular(35.w)`, `Border.all(color: Color(0xff343434))`), and it sits in the same list padding (`:217`).
-
-In the app, a native in a list gets the decoration of an item of that list, copied from that item: its `color`, `borderRadius`, `border`, shadow or `elevation`, and inner `padding`, with the gap between two items as the native's bottom margin. This is an ADAPTED frame line (section 2 step 4) with the item's file:line. Items with no decoration → no frame. The team's `0xff343434` is the PPT item's border and never goes into another app.
-
-### The collapsible banner — `CollapsibleBannerWidget(backgroundColor:)`
-
-The widget takes a `backgroundColor` (`after/lib/ads/ads_collapsible_banner.dart:23`, `:182`; default `Color(0xff060B12)`, the PPT app's dark navy) and paints the strip behind the banner and its expanded panel with it (`:153`, `:159`, `:191`). The team's call (`home_screen.dart:297`) passes none.
-
-In the app, that call gets `backgroundColor:` = the colour of the app's bottom edge where the banner sits: the bottom bar's colour when the banner sits on the bar, else the screen's background. This is an ADAPTED theme argument with its file:line. `BannerWidget` paints nothing of its own (`banner_widget.dart:75`, `Colors.transparent`).
+**The team's apps give no example of choosing these values for an app** (the last row of the table above). This one rule is app-factory's, so that the native matches the frame and the screen it sits on:
+- `nativeBGColor` = the fill of the item the native's frame copies (no fill → the screen's background: `Scaffold(backgroundColor:)`, else the theme's `scaffoldBackgroundColor`);
+- `headerTextColor` = that item's title text colour; `bodyTextColor` = its second text line's colour (no second line → `headerTextColor`);
+- `btnBgColor1`, `btnBgColor2` = the first and last colour of the app's main button's gradient (a one-colour button → that colour in both); `btnTextColor` = that button's text colour;
+- `btnAdBgColor`, `btnAdTextColor` = `btnBgColor1`, `btnTextColor`.
+- **Written** `#RRGGBB`, or `#AARRGGBB` for a colour with alpha: `Color.parseColor` takes nothing else, and the team's fallbacks (`"1A1A1A"`, `:32`, `:125`) have no `#`, so `config.json` carries every key. R5 checks it.
+- **From** a literal in the app's `lib/`: `Color(0xAARRGGBB)` → `#RRGGBB` when AA is FF, else `#AARRGGBB`; a Material constant → its value (`Colors.white` `#FFFFFF`, `Colors.black` `#000000`, the rest from Flutter's `colors.dart`). A computed colour (`ColorScheme.fromSeed`, a Material default) → `ads-install.mjs pixel <png> <x> <y>` on the step-2 screenshot, at a point of that element with no text or image on it.
+- **Light and dark:** one set. `themeMode: ThemeMode.dark` → the colours of `darkTheme`, otherwise of `theme`. An app with a `darkTheme` that follows the system gets the `theme` colours, and the report says: "In dark mode the natives keep the light colours: the team's factories take one colour set (`MainActivity.kt` `setToast`)."
+- Each key is a THEME row of the plan: key | value | the app's file:line (or screenshot + x,y) | what it is in the app.
 
 ### Kept as the team has them, and listed in the report
 
-These are drawn by the team's layouts and helpers, which are not changed:
-- the `ad_advertiser` text `#E0DFDF` (`native_admob_small.xml:120`, `native_admob_big.xml:105`, `native_admob_full.xml:122`): light grey, faint on a light `nativeBGColor`;
+- the `ad_advertiser` text `#E0DFDF` (`native_admob_small.xml:120`, `native_admob_big.xml:105`, `native_admob_full.xml:122`; the same in IPTV_two's layouts): light grey, faint on a light `nativeBGColor`;
 - the natives' Poppins fonts (`res/font/poppins*.ttf`, the layouts' `fontFamily`);
-- the "Loading..." dialog before an interstitial: white text in a 10 % white box on a 10 % black screen (`base/lib/AdsUtils/loading_screen.dart:21-43`);
+- the collapsible banner's strip `#060B12` and its "Advertisements" label, white on `#1E293B` (`ads_collapsible_banner.dart:23`, `:201-205`): dark on a light app;
+- the "Loading" dialog before an interstitial: white text in a 10 % white box on a 10 % black screen (`base/lib/AdsUtils/loading_screen.dart:21-43`);
 - the loading shimmers: grey (`base/lib/AdsUtils/shimmer.dart:12`), and the banner's blue and grey one (`shimmer_banner.dart:16-21`);
-- the collapsible banner's "Advertisements" label: white on `#1E293B` (`ads_collapsible_banner.dart:201-205`);
 - interstitial, app open and rewarded ads: Google's own full-screen activity, not the app's.
 
-### Alignment — every screen with a native or a banner, the intro pages included
+### Measured on the device by `seen` (section 6)
 
-- **Native:** it sits inside the content padding of the screen it is on. In a list it is one of the list's children, so the list's `padding` applies to it. Outside a list, its host (section 2 step 4) uses the horizontal padding of the content around it: the app's value, with its file:line. Its left and right edges line up with those of the items above and below it.
-- **Banner:** it spans the screen's width at the bottom of the body, above the app's bottom bar. The app's last list item scrolls fully above it, and no floating button sits on it.
-- **Intro:** every page is whole with the native in it: the text, image, page indicator and buttons are on screen, none of them under the native or cut off (section 2, the image size).
-- **Measured by `seen`** (section 6) on each native and banner: the left and right gaps, the native's background against `nativeBGColor`, and the app's colour beside the ad.
-  - The gaps must also equal the app's padding for that screen: its dp from the code × the device's density ÷ 160.
-  - A different gap is a FAIL of the wiring, written in the report with both numbers, then fixed and seen again.
+- Each native and banner: the gaps to the left and right screen edges. They must differ by 2 px at most. A native in a list must have gaps equal to the list's content padding (its dp from the code × the device's density ÷ 160); a banner's gaps must be 0.
+- Each native: its background on the screenshot = `config.json`'s `nativeBGColor`.
+- A different number is a FAIL of the wiring, written in the report with both numbers, then fixed and seen again.

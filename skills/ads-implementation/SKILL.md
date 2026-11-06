@@ -41,10 +41,10 @@ Never IPTV_two, never a fix of the team's code. This command adds ads and nothin
 - **Its screens** — the app's file for each job of flutter-ads section 2's table (splash, intro, home, the `onTapInter` list, the reward-gated action, settings, the purchase): file and the tap that opens each. On the device (`flutter run -d <id>`): each screen once, its element list and one screenshot (`${CLAUDE_PLUGIN_ROOT}/skills/app-qa/SKILL.md` E2, E8: elements from the element list, never coordinates off a screenshot). Stop `flutter run`.
 - **Its look** (flutter-ads section 8), each with its file:line:
   - `MaterialApp` / `GetMaterialApp`: `theme`, `darkTheme`, `themeMode`;
-  - home's list that the native goes into: its `padding`, one item's decoration (`color`, `borderRadius`, `border`, shadow or `elevation`, inner `padding`), the gap between two items, the item's title and second-line text colours;
+  - home's list that the native goes into: its horizontal content `padding`, one item's `borderRadius`, `border` (colour, width) and fill `color`, the gap between two items, the item's title and second-line text colours;
   - the app's main button: its colour or gradient, its text colour;
-  - each screen that gets a banner: the colour of its bottom edge (its bottom bar, else the screen's background), its list's `padding`, any floating button;
-  - the intro: its background and its content padding;
+  - each screen that gets a banner: its body `Column` and the content above the banner (an `Expanded`, or the main button), where the content padding is set, any floating button;
+  - the intro page: its `Column` and the main button the native goes after;
   - a colour the code computes: the step-2 screenshot path and the x,y of a point of that element, for `ads-install.mjs pixel`.
 
 ## 3. The plan — a table, nothing in it of your own
@@ -56,7 +56,7 @@ One row per team ad line in RECIPE.md's "The team's ad lines" lists, and one per
 
 Then:
 - one row per slot of step 2 that the recipe does not cover;
-- one row per ADAPTED line (flutter-ads section 2 step 4): the team file:line it serves, the kind, and the fact about the app that needs it — a frame, theme or host-padding row also names the app's item, colour or padding it copies;
+- one row per ADAPTED line (flutter-ads section 2 step 4): the team file:line it serves, the kind, and the fact about the app that needs it — a frame or host-padding row also names the app's item or padding it copies (flutter-ads section 8, "The frame");
 - one THEME row per colour key of `config.json` (flutter-ads section 8): key | value | the app's file:line, or screenshot + x,y | what it is in the app (for example "`nativeBGColor` `#F4F1EC` | `lib/screens/home.dart:88` | the topic card's `color:`").
 
 Nothing else. Do not ask the user about placements.
@@ -80,7 +80,7 @@ flutter-ads section 2, exactly:
    - note `--slot-edits` and `--no-screen` as that step says.
 3. **Only the team's lines and the ADAPTED kinds** of flutter-ads section 2 step 4, each one in the plan. This holds even where the team's code looks wrong: the PPT intro hides Continue while the intro native is on and shows its own Next/Done, and both go in as the team has them.
 4. **Keep each file's line endings.**
-5. **The app's look** (flutter-ads section 8): write each THEME row's value into its key in `config.json` (only the colour keys; the installer keeps a value already there); put the frame around each list native, the host padding and the collapsible banner's `backgroundColor:`, each from its plan row.
+5. **The app's look** (flutter-ads section 8): write each THEME row's value into its key in `config.json` (only the colour keys; the installer keeps a value already there); put each list native in the team's frame `Container` with its frame row's radius, border and gap, the intro native and each banner where flutter-ads section 8 "Where natives and banners sit" puts them, each from its plan row.
 6. Then run `"<flutter>" analyze` and fix only what the ads lines broke.
 
 ## 6. Contract (only in an app-factory project: CONTRACT.md and `.pipeline/` present)
@@ -98,7 +98,7 @@ Per criterion one widget test named "ACn …" that the ad widget of its row is o
 - the app's Firebase project has no Remote Config value under its parameter yet → every id is `"11"`: seed the last online launch instead (Google's test ids from `config.json`) — debug build, `adb -s <id> shell run-as <applicationId>` writes `shared_prefs/FlutterSharedPreferences.xml` with `flutter.<key>` = the `config.json` values (ints as `<long>`), then launch;
 - first launch: splash interstitial → the intro as the team's (PPT: with `nativeIntroBig` on, the big native under the text and Next / Done at the top right, no Continue), every intro page whole (nothing drawn over the native or cut off) → Done → intro app open → Home; the home native in its slot; a home feature tap → "Loading..." → interstitial, Back, next tap → interstitial; each banner screen; the reward action → the rewarded ad, then the action; Settings' privacy row where consent requires it; Home key, ~10 s, reopen → app open ad;
 - on every screenshot nothing of the app covers an ad;
-- **the app's look, on every screen with a native or a banner, the intro pages included** (flutter-ads section 8): `seen`'s `alignment:` line says centred and its gaps in dp equal the plan's padding row for that screen × density ÷ 160; its `theme:` line says the same colour; in the screenshot the native has the frame of the plan's frame row (or none, when the app's items have none); on a banner screen, scroll to the end: the last item is fully above the banner and no floating button is on it (element list, app-qa E2). An app with a `darkTheme` that follows the system: one screenshot of home in dark mode (`adb -s <id> shell cmd uimode night yes`, then `night no`) for the report;
+- **the app's look, on every screen with a native or a banner, the intro pages included** (flutter-ads section 8): `seen`'s `alignment:` line says centred; a native's gaps in dp equal its list's content padding from the plan (dp × density ÷ 160), a banner's gaps are 0 (it spans the screen); its `theme:` line says the same colour; in the screenshot a list native has the team's frame with the plan's frame row (border only when the app's items have one), and the intro native has none, after the main button; on a banner screen, scroll to the end: the last item is fully above the banner and no floating button is on it (element list, app-qa E2). An app with a `darkTheme` that follows the system: one screenshot of home in dark mode (`adb -s <id> shell cmd uimode night yes`, then `night no`) for the report;
 - **no crash, enforced by the tool** (flutter-ads section 6), not by looking: the walk starts with `ads-install.mjs launch "$(pwd)" <serial> build/app/outputs/flutter-apk/app-debug.apk` (clears the app's data, clears the logs, starts it, watches it 30 s) and every `seen` re-checks the crash buffer, the process id, ANRs and uncaught exceptions in the ad code. A relaunch in the middle of the walk is only `launch … --keep-data`; a hand-made `am start` changes the pid and is reported as a crash;
 - **release, then stress on it:** `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" release "$(pwd)"` (stop the emulator and the Gradle daemons first on a small Mac).
   - It runs `flutter build apk --release`, signed with this Mac's debug key through Android Gradle's injected signing. The app's own release key is often only on its owner's Mac, and the build then fails with "Keystore file … not found". A release signed with another key than the debug build on the device would also fail `adb install -r`.
@@ -142,7 +142,7 @@ Start an agent (Agent tool, general-purpose) that changes nothing, with this tas
 >
 > Open the source and compare. FAIL when the hunk:
 > - has no source;
-> - differs from the team's line (another condition, value, size, key, widget, callback, position or order), other than a team-app name replaced with the app's own name for the same thing (say which) or the `backgroundColor:` argument of a planned theme row;
+> - differs from the team's line (another condition, value, size, key, widget, callback, position or order), other than a team-app name replaced with the app's own name for the same thing (say which);
 > - adds a line that is neither the team's nor a planned ADAPTED line;
 > - is an ADAPTED line of a kind that flutter-ads section 2 step 4 does not list, or whose stated fact about the app is not true in the app's code;
 > - removes or changes an app line that no team hunk replaces.
@@ -151,7 +151,7 @@ Start an agent (Agent tool, general-purpose) that changes nothing, with this tas
 > - a plan row that has no hunk;
 > - a THEME row whose value is not the colour at its source (open the file:line; for a screenshot point, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/ads-install.mjs" pixel <png> <x> <y>`), or that takes its colour from another element than flutter-ads section 8's table says;
 > - a colour key of `config.json` with no THEME row;
-> - a frame line that is not the decoration of the app's item at its file:line, a host padding that is not the app's value at its file:line, a `backgroundColor:` that is not the colour at its file:line.
+> - a frame that is not flutter-ads section 8's `Container` (`alignment: Alignment.center`, `width: sw`, `padding: EdgeInsets.all(30.w)`, no `color:`), or whose radius, border or bottom margin is not the app's item's at its file:line; a host padding that is not the app's value at its file:line; a `backgroundColor:` on `CollapsibleBannerWidget(` (the team's apps pass none); a banner or intro native not where section 8 puts it.
 >
 > A file the installer wrote whole as the team's (its report line says "the team's") is one PASS row after `cmp` with the template file, with the app's names. Change nothing. Return the table and the FAIL rows.
 
@@ -159,4 +159,4 @@ Every FAIL is fixed, then steps 8, 9 and 9b run again until 9b has no FAIL. Then
 
 ## 10. Report to the user, in this order
 
-The slots found (step 2) and the plan table with each row's source; `ADS_CHANGES.md`'s Checks section, quoted; the 9b table (every row) and what each FAIL fix changed; the THEME rows and the frame, theme and host-padding rows; each `seen` `alignment:` and `theme:` line with the app's padding it was compared with; flutter-ads section 8's "Kept as the team has them" list; the dark-mode line and screenshot when it applies; each step-8 result line, the `proof` lines (every placement PASS with its screenshot); what is not verified and why (iOS on this Mac; no Firebase files → seeded values; the team's behaviours kept, flutter-ads section 4); each team-app name replaced in step 5; every ADAPTED line with its team file:line and the fact about the app that needed it; whether step 1 made the git repository; that the release build was signed with this Mac's debug key; before release: the owner's AdMob App IDs (`AndroidManifest.xml`, `Info.plist`), the real ad unit ids in Remote Config under the app's parameter, the app's RevenueCat keys in `lib/in_app_purchase/constant.dart` when the installer wrote it.
+The slots found (step 2) and the plan table with each row's source; `ADS_CHANGES.md`'s Checks section, quoted; the 9b table (every row) and what each FAIL fix changed; the THEME rows (marked app-factory's rule: the team's apps give no colour example, flutter-ads section 8) and the frame and host-padding rows; each `seen` `alignment:` and `theme:` line with the app's padding it was compared with; flutter-ads section 8's "Kept as the team has them" list; the dark-mode line and screenshot when it applies; each step-8 result line, the `proof` lines (every placement PASS with its screenshot); what is not verified and why (iOS on this Mac; no Firebase files → seeded values; the team's behaviours kept, flutter-ads section 4); each team-app name replaced in step 5; every ADAPTED line with its team file:line and the fact about the app that needed it; whether step 1 made the git repository; that the release build was signed with this Mac's debug key; before release: the owner's AdMob App IDs (`AndroidManifest.xml`, `Info.plist`), the real ad unit ids in Remote Config under the app's parameter, the app's RevenueCat keys in `lib/in_app_purchase/constant.dart` when the installer wrote it.

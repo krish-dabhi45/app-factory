@@ -749,13 +749,15 @@ export function pngPixels(buf) {
 }
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(-6).slice(i - 1, i + 1), 16))
 const sameColour = (x, y) => rgb(x).every((v, i) => Math.abs(v - rgb(y)[i]) <= 8)
-// a native or banner on the screen: centred between the app's edges (the gaps left and right equal, ±2 px), and a native's
-// background (the most common colour inside ad_view outside its content views) = config.json's nativeBGColor
-export function adLook(img, v, views, area, dpi, want) {
+// a native or banner on the screen: centred between the app's edges (the gaps left and right equal, ±2 px); a banner spans
+// the screen (both gaps ≤ 2 px: the team's apps put it in no padding, flutter-ads section 8); a native's background (the most
+// common colour inside ad_view outside its content views) = config.json's nativeBGColor
+export function adLook(img, v, views, area, dpi, want, { banner = false } = {}) {
   const under = (n) => { for (let p = n.parent; p; p = p.parent) if (p === v) return true; return false }
   const dp = (x) => Math.round((x * 160) / dpi), [l, , r] = v.b, gl = l - area[0], gr = area[2] - r, centred = Math.abs(gl - gr) <= 2
   const text = [`alignment: ${gl} px (${dp(gl)} dp) from the left edge, ${gr} px (${dp(gr)} dp) from the right${centred ? ' — centred' : ` — NOT centred (${Math.abs(gl - gr)} px apart): the ad sits off to one side; the gaps must also equal the padding of the app's content around it`}`]
   let ok = centred
+  if (banner && (gl > 2 || gr > 2)) { ok = false; text.push(`width: the banner does not span the screen (${gl} px and ${gr} px left free): the team's apps put it as the last child of the body Column, outside the content padding`) }
   if (want !== undefined && img) {
     const parts = views.filter((n) => n.shown && AD_PARTS.has(n.id) && under(n)), count = new Map()
     for (let i = 1; i < 16; i++) for (let j = 1; j < 8; j++) {
@@ -773,7 +775,7 @@ export function adLook(img, v, views, area, dpi, want) {
   }
   return { ok, text }
 }
-const CHECKER = 4 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
+const CHECKER = 5 // raised whenever `seen` / `launch` / `stress` get stricter: a record made by an older checker is STALE
 export function placements(root, { all = false } = {}) {
   const lib = path.join(root, 'lib'), files = walk(lib).filter((f) => f.endsWith('.dart')).sort(), code = new Map(files.map((f) => [f, blank(read(path.join(lib, f)))]))
   const everything = [...code.values()].join('\n')
@@ -981,7 +983,7 @@ export function seen(root, serial, id) {
   } else {
     const min = Math.round(50 * s.dpi / 160), banners = s.views.filter((v) => v.cls === 'com.google.android.gms.ads.AdView' && v.shown)
     // a banner's own expanded collapsible panel (a PopupWindow) is the banner, not something over it
-    const looks = new Map(banners.map((v) => [v, adLook(img, v, s.views, s.area, s.dpi, undefined)]))
+    const looks = new Map(banners.map((v) => [v, adLook(img, v, s.views, s.area, s.dpi, undefined, { banner: true })]))
     ok = banners.some((v) => inArea(v.b) && v.b[3] - v.b[1] >= min && !covered(v.b, /^PopupWindow/) && looks.get(v).ok)
     ev.push(...(banners.length ? banners.flatMap((v) => [`banner AdView ${fmt(v.b)}: ${v.b[3] - v.b[1]} px tall (≥ ${min})${inArea(v.b) ? '' : ` — not inside the app's visible area ${fmt(s.area)}`}${covered(v.b, /^PopupWindow/)}`, ...looks.get(v).text.map((t) => `  ${t}`)]) : ['no banner (AdView) shown on the screen']))
   }
@@ -1182,7 +1184,9 @@ function selftest() {
   assert.ok(lk.ok, lk.text.join(' | ')); assert.match(lk.text[0], /40 px \(15 dp\) from the left edge, 40 px \(15 dp\) from the right — centred/); assert.match(lk.text[1], /background on the screen #F4F1EC, config\.json nativeBGColor #F4F1EC — the same; the app around it #101010/)
   lk = adLook(flat('#FFFFFF'), adV, [adV, media], [0, 80, 1080, 2300], 420, '#F4F1EC'); assert.ok(!lk.ok && /NOT the same/.test(lk.text[1]), 'other colours on the device than config.json')
   lk = adLook(flat('#F4F1EC'), { ...adV, b: [0, 1000, 1000, 1400] }, [], [0, 80, 1080, 2300], 420, undefined); assert.ok(!lk.ok && /NOT centred \(80 px apart\)/.test(lk.text[0]) && lk.text.length === 1, 'off to one side; a banner has no colour check')
-  out.push('ad look (PNG pixels, centred, colour) ok')
+  lk = adLook(null, { b: [1, 2000, 1079, 2150] }, [], [0, 80, 1080, 2300], 420, undefined, { banner: true }); assert.ok(lk.ok, 'a banner 1 px from each edge spans the screen')
+  lk = adLook(null, { b: [40, 2000, 1040, 2150] }, [], [0, 80, 1080, 2300], 420, undefined, { banner: true }); assert.ok(!lk.ok && /does not span the screen \(40 px and 40 px/.test(lk.text[1]), 'a banner inside the content padding')
+  out.push('ad look (PNG pixels, centred, colour, banner width) ok')
 
   // crash detection: the lines a device gave for the F2 null show, a native crash, an ANR, and a monkey run
   const dev = "I/flutter ( 6364): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Null check operator used on a null value\nI/flutter ( 6364): #0      AdsLoadUtil.showInterCommon (package:ai_ppt_generater/ads/ads_load_util.dart:227)\nI/flutter ( 6364): #1      onTapInter.<anonymous closure>.<anonymous closure> (package:ai_ppt_generater/service/app_constant.dart:89)\n"

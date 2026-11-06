@@ -2,6 +2,51 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.56.0 — 2026-11-06 — commit c7c1d18
+
+**The ads take the app's look on every screen, the intro included, and the device run measures it.** The user asked that once ads are placed they match the app's theme and alignment on all screens. The team's code already has three places where an ad's look is set, and 0.55 left all three at the PPT app's values:
+
+| Where the team sets the look (evidence) | 0.55 | 0.56 |
+|---|---|---|
+| Eight Remote Config colour keys: read at `lib/ads/ads_splash_utils.dart:32-39` and `:125-132`, sent at `:364-377`, applied by `MainActivity.kt` (`NativeAdFull` `:212` `:236` `:247`, `NativeAdBig` `:399` `:423` `:434`, `NativeAdSmall` `:557` `:579` `:589`) | `config.json` got the template's values (`nativeBGColor` `#FFFFFF`, `btnBgColor1` / `btnBgColor2` `#FF7236`) in every app | each key from the app's theme, with its file:line or a screenshot pixel (flutter-ads section 8 table: which view each key colours, which app colour it takes) |
+| The frame around the home native: `after/lib/screens/home_screen.dart:225-234`, the same width, radius and border as the topic item at `:256-262` (`Color(0xff343434)`) | no rule: the native went in with no frame or the PPT border | a list native gets the decoration of the app's own list item (ADAPTED kind **frame**, with the item's file:line) |
+| `CollapsibleBannerWidget(backgroundColor:)`: `after/lib/ads/ads_collapsible_banner.dart:23`, default `Color(0xff060B12)`, painted at `:153` `:159` `:191`; the team's call `home_screen.dart:297` passes none | a dark navy strip in every app | the app's bottom-edge colour (ADAPTED kind **theme**) |
+
+### Added
+
+- `skills/flutter-ads/SKILL.md` section 8 "Theme and alignment": the colour table (8 keys → view → the app's value); values `#RRGGBB` / `#AARRGGBB` only, because `Color.parseColor` takes nothing else and the team's fallback `"1A1A1A"` (`:32`, `:125`) has no `#`; a literal → its hex, a Material constant → its value, a computed colour → `ads-install.mjs pixel` on the step-2 screenshot; light / dark: one set, `themeMode: ThemeMode.dark` → `darkTheme`, else `theme`, and the report states the dark-mode result when the app follows the system; the frame rule; the collapsible banner rule; the list of looks kept as the team's with file:line (`ad_advertiser` `#E0DFDF` in the three layouts, Poppins fonts, the "Loading" dialog `loading_screen.dart:21-43`, the shimmers `shimmer.dart:12` / `shimmer_banner.dart:16-21`, the "Advertisements" label `ads_collapsible_banner.dart:201-205`, Google's full-screen ads); the alignment rules for natives, banners and intro pages.
+- `scripts/ads-install.mjs`:
+  - check **R5** in `changes`: every colour key `lib/ads/ads_splash_utils.dart` reads is in `config.json` as `#RRGGBB` / `#AARRGGBB`, and not all of them still equal the template's values. `verify` fails while R5 fails.
+  - `pngPixels(buf)`: reads an 8-bit RGB / RGBA, non-interlaced PNG (what `adb exec-out screencap -p` gives) with `node:zlib`, all five PNG filters.
+  - `adLook(img, v, views, area, dpi, want)`, run by `seen` on every native and banner: `alignment:` line with the gaps to the left and right screen edges in px and dp, FAIL when they differ by more than 2 px; for a native a `theme:` line with the most common colour inside `ad_view` outside its content views (`ad_media`, `ad_headline`, `ad_body`, `ad_call_to_action`, `ad_attribution`, `ad_advertiser`, `ad_stars`, `ad_icon`, `ad_price`, `ad_store`, `btn_card`) on a 15 × 7 grid, FAIL when it differs from `config.json`'s `nativeBGColor` by more than 8 in a channel; the app's colour just outside the ad is printed. A see-through `nativeBGColor` is printed, not compared.
+  - command `pixel <png> <x> <y>` → `#RRGGBB`; exit 1 for a point outside the image.
+
+### Changed
+
+- `scripts/ads-install.mjs`: `seen` takes the screenshot once, before the checks, and saves that same image; `CHECKER` 3 → 4, so `proof` shows every `seen` record made before 0.56 as STALE; the `ADS_CHANGES.md` legend reads "R: the app's slots, Remote Config parameter and native colours".
+- `skills/flutter-ads/SKILL.md`: section 1 (`config.json`'s colour keys are the app's theme); section 2 (a list native framed as one of the list's items, inside its padding; a `CollapsibleBannerWidget` gets `backgroundColor:`; ADAPTED kinds **frame** and **theme** added; **host** padding uses the app's own value with its file:line); section 5 (R5); section 6 (the `alignment:` and `theme:` checks of `seen`).
+- `skills/ads-implementation/SKILL.md`: description; step 2 "Its look" (theme / darkTheme / themeMode, home list padding and item decoration, main button, banner screens' bottom edge and floating button, intro background and padding, computed colours with screenshot x,y); step 3 THEME rows and frame / theme / host-padding rows; step 5 item 5 writes them; step 8 checks on every native and banner screen including intro pages (`alignment:` gaps = the plan's padding × density ÷ 160, `theme:` the same colour, the frame, the last list item fully above the banner, no floating button on it, a dark-mode screenshot when the app follows the system) and FAIL cases; step 9 lists R5; 9b gets `config.json` and fails a THEME row that is not the colour at its source, a colour key with no THEME row, a frame / padding / `backgroundColor:` not equal to its app source; step 10 reports all of it.
+- `README.md` (`ads-install.mjs` row: R5, the `seen` alignment / colour checks, `pixel`), `GUIDE.md` (ads: "The app's look" line, R5 in the checks list).
+- `.claude-plugin/plugin.json`: 0.56.0.
+
+### Checked
+
+- `node scripts/ads-install.mjs selftest` → ok, with the new cases: R5 FAIL on the template's colours, FAIL on `nativeBGColor` `"FFFFFF"`, PASS on `#F4F1EC`; a 5 × 5 RGBA PNG with one row per filter type 0–4 read back pixel for pixel; `adLook` centred (40 px / 15 dp each side at 420 dpi) with the same colour → ok, `#FFFFFF` on the device against `#F4F1EC` → FAIL, 0 px / 80 px → FAIL "NOT centred (80 px apart)"; the team's PPT build still gives T1 T2 T3 R3 R4 N1 PASS.
+- `pngPixels` on a real PNG (`ai_ppt_generater/assets/splash_screen/bg.png`, 1242 × 2688 RGBA): 0 of 68,352 sampled pixels differ from the same file converted to BMP by `sips`; 92 ms to read.
+- `node scripts/simulate.mjs` exit 0; `node scripts/simulate-without-prd.mjs` exit 0; `node scripts/pipeline.mjs selftest` ok.
+- Added lines scanned with `source-app.mjs`'s VAGUE regex: the matches are JavaScript spread syntax (three dots), the dialog text "Loading" followed by three dots as the app shows it, and lines that already had the ellipsis character before this version.
+
+### Not checked
+
+- `seen`'s `alignment:` and `theme:` lines on a device: `adb devices` listed no device on this Mac during this change. The first `/app-factory:ads-implementation` run with a device is the first device check.
+- That `adb exec-out screencap -p` on every device gives 8-bit RGB / RGBA non-interlaced PNG: if it does not, `pngPixels` throws, `seen` skips the colour comparison (no image), and the alignment check still runs.
+- Dark mode on the device (`cmd uimode night yes`) as written in step 8.
+- iOS: the team's change has no iOS part (flutter-ads section 1), so iOS natives are not covered by section 8.
+
+### Not in this version
+
+- No change to the team's layouts, `MainActivity.kt` or `lib/ads/`: the `ad_advertiser` `#E0DFDF` text and the other looks in section 8's "Kept as the team has them" list stay as the team has them.
+
 ## 0.55.0 — 2026-11-05 — commit c912503
 
 **A rerun on a folder that already has the app continues from it — checked against the Mendwise folder (`/Users/mach/app-dev.v1`).** The resume itself has been in the plugin since 2026-11-04 (no-PRD: `source-app.mjs status` → PRD.md re-audited when its check fails, CONTRACT.md and `lib/` kept; build-app: contract re-audit, "existing work" step, groups whose criteria pass are not built again). Under 0.54's checker Mendwise's status is `{prd: true, prdProblems: 12, staticMissing: ["assets"], contract: true, dartFiles: 218}`, so a rerun re-audits PRD.md and continues from the code. Tracing that rerun found 5 defects, fixed here:

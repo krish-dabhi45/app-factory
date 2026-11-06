@@ -2,6 +2,38 @@
 
 One entry per version in `.claude-plugin/plugin.json`, newest first. Each entry gives the commit, the date, every file changed and what it now does, the checks run with their results, and what was not checked. Versions before 0.47.0 are only in `git log`.
 
+## 0.57.0 — 2026-11-06 — commit a7a2aa7
+
+**Where an ad sits in an app's look is now taken from the team's two apps with ads, the AI PPT app and IPTV_two, rule by rule with both apps' file:line.** The user asked that such tasks follow those two apps' handling, without rules of app-factory's own. 0.56.0 had three rules that neither app has, and they are removed:
+
+| 0.56.0 rule | What both apps do (evidence) | 0.57.0 |
+|---|---|---|
+| the frame copies the item's fill `color`, shadow and inner padding | the frame `Container` has `alignment: Alignment.center`, `width: sw`, `padding: EdgeInsets.all(30.w)` and no fill in both (PPT `home_screen.dart:225-234`, IPTV `bottom_bar/stream_now_iptv_screen.dart:94-105`); only the border is the item's (PPT `Color(0xff343434)` `:262`, IPTV `Color(0xFFE9EDF3), width: 1.5` `:178`), and the radius (PPT `35.w` = item `:261`; IPTV `20`, card `15` `:177`) | the team's `Container` as written, with the app item's radius, border and gap |
+| ADAPTED kind **theme**: `CollapsibleBannerWidget(backgroundColor:)` with the app's colour | no call passes `backgroundColor:` (PPT `home_screen.dart:297`, `select_template_screen.dart:170`, `template_preview_screen.dart:113`; IPTV uses `BannerWidget`) | removed; 9b fails a `backgroundColor:`; the `#060B12` strip is listed under "Kept as the team has them" |
+| the native colour mapping presented as part of the team's pattern | both apps ship the same defaults (`ads_variable.dart:51-60`, IPTV `:52-61`: `#342F38`, `#FFFFFF`, `#6F34FF` → `#C93EA2`), used on no screen of either app; real values are only in each app's Firebase Remote Config, not in either folder. IPTV_two's `config.json` (2026-10-26) and `common_flow_demo/remote_config.json` (2026-10-28) are app-factory's outputs, not the team's | the mapping stays and is marked as app-factory's rule in section 8 and in the report |
+
+Added from both apps: the bottom margin of the frame = the gap between the list's items (PPT `.marginOnly(bottom: 40.w)` `:234` = item `:270`; IPTV `30.w` `:98` = `30.verticalSpace` `:66`, `:77`, `:86`); the native inside the list's content padding (PPT `:217`, IPTV `:35`, both `50.w`); the intro native with no frame, the last child after the main button and `50.verticalSpace` (PPT `onboarding_screen.dart:146-151`, IPTV `intro_screen.dart:140-145`); a banner as the last child of the body `Column`, below the content and outside its padding, spanning the screen (PPT 3 screens, IPTV `channel_list_screen.dart:122`, `bottom_bar/channels_screen.dart:135`, `playlist_group_screen.dart:82` with the padding on the content at `:39`).
+
+### Changed
+
+- `skills/flutter-ads/SKILL.md`: section 8 rewritten: the two-app table, "The frame" (the team's `Container` as code, an item with no border → no `border:`, decided because neither app shows one), "Where natives and banners sit", the colour keys with the app-factory rule marked, "Kept as the team has them" (adds the collapsible banner strip `#060B12`), "Measured on the device". Section 2: the native host bullet and the banner bullet point at section 8; ADAPTED kind **frame** = the team's frame with the item's radius, border and gap; kind **theme** removed. The "Never" list says IPTV_two is cited only in section 8 and no IPTV_two code is installed.
+- `skills/ads-implementation/SKILL.md`: step 2 "Its look" reads the item's radius, border, fill and gap, the banner screens' body `Column`, the intro page's main button; step 3 frame and host-padding rows; step 5 item 5 puts the frame, the intro native and the banners as section 8 says; step 8: a banner's gaps are 0, a list native has the team's frame, the intro native none; 9b fails a frame that is not section 8's `Container`, a `backgroundColor:` on `CollapsibleBannerWidget(`, a banner or intro native in another place; step 10 marks the THEME rows as app-factory's rule.
+- `scripts/ads-install.mjs`: `adLook(img, v, views, area, dpi, want, { banner: true })` from `seen` fails a banner with more than 2 px free on either side ("does not span the screen"); `CHECKER` 4 → 5 (records of 0.56 are STALE).
+- `README.md`, `GUIDE.md`: the same rules in their ads lines.
+- `.claude-plugin/plugin.json`: 0.57.0.
+
+### Checked
+
+- Every file:line in the section 8 table read in `/Users/mach/testing/ai_ppt_generater` and `/Users/mach/testing/IPTV_two` (three were off by one or two lines in the first draft and were corrected: `ads_variable.dart:51-60` / `:52-61`, IPTV's gaps `:66` `:77` `:86`, PPT home banner `:295-297`).
+- `node scripts/ads-install.mjs selftest` → ok, with the new cases: a banner 1 px from each edge passes, a banner with 40 px on each side fails "does not span the screen (40 px and 40 px".
+- `node scripts/simulate.mjs` exit 0; `node scripts/simulate-without-prd.mjs` exit 0.
+- This entry scanned with `source-app.mjs`'s VAGUE regex.
+
+### Not checked
+
+- `seen` on a device: no device was connected (`adb devices` empty).
+- The team's published native colours: they are only in the two apps' Firebase Remote Config consoles.
+
 ## 0.56.0 — 2026-11-06 — commit c7c1d18
 
 **The ads take the app's look on every screen, the intro included, and the device run measures it.** The user asked that once ads are placed they match the app's theme and alignment on all screens. The team's code already has three places where an ad's look is set, and 0.55 left all three at the PPT app's values:
